@@ -101,7 +101,7 @@ class VoiceAgent(Agent):
             stt=sarvam.STT(
                 language="unknown",
                 model="saaras:v3",
-                mode="transcribe",
+                mode="translate",
                 flush_signal=True,
             ),
             llm=None,
