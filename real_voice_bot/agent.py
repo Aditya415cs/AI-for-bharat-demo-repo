@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import os
+import re
 from dotenv import load_dotenv
 
 from livekit.agents import JobContext, WorkerOptions, cli
@@ -15,11 +16,54 @@ from nodes.technical import (
     technical_score_node,
     close_interview_node,
 )
+from nodes.utils import get_llm
 from state import InterviewState
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("skillfit-voice")
+
+LANGUAGE_OPTIONS = {
+    "english": ("en-IN", "English"),
+    "hindi": ("hi-IN", "Hindi"),
+    "bengali": ("bn-IN", "Bengali"),
+    "bangla": ("bn-IN", "Bengali"),
+    "tamil": ("ta-IN", "Tamil"),
+    "telugu": ("te-IN", "Telugu"),
+    "gujarati": ("gu-IN", "Gujarati"),
+    "kannada": ("kn-IN", "Kannada"),
+    "malayalam": ("ml-IN", "Malayalam"),
+    "marathi": ("mr-IN", "Marathi"),
+    "punjabi": ("pa-IN", "Punjabi"),
+    "odia": ("od-IN", "Odia"),
+    "oriya": ("od-IN", "Odia"),
+}
+
+
+def detect_language_preference(user_text: str) -> tuple[str, str] | None:
+    normalized = re.sub(r"[^a-z\s-]", " ", user_text.lower())
+    words = set(normalized.split())
+
+    for language, language_config in LANGUAGE_OPTIONS.items():
+        if language in words or language.replace("-", " ") in normalized:
+            return language_config
+
+    return None
+
+
+def translate_for_tts(text: str, language_name: str) -> str:
+    if language_name == "English":
+        return text
+
+    llm = get_llm(temperature=0, max_tokens=250)
+    prompt = f"""Translate this spoken interview response into {language_name}.
+Keep it natural, respectful, and conversational.
+Return only the translated sentence or sentences.
+No markdown, no explanation.
+
+Text:
+{text}"""
+    return llm.invoke(prompt).content.strip()
 
 def get_initial_state() -> InterviewState:
     return {
@@ -112,20 +156,54 @@ class VoiceAgent(Agent):
             ),
         )
         self.state = get_initial_state()
+        self.language_selected = False
+        self.preferred_language_code = "en-IN"
+        self.preferred_language_name = "English"
+
+    def set_tts_language(self, language_code: str, language_name: str):
+        self.preferred_language_code = language_code
+        self.preferred_language_name = language_name
+        self._tts.update_options(target_language_code=language_code)
+        logger.info(f"[Language] TTS set to {language_name} ({language_code})")
+
+    async def say_in_preferred_language(self, text: str):
+        spoken_text = translate_for_tts(text, self.preferred_language_name)
+        await self.session.say(spoken_text)
 
     async def on_enter(self):
         greeting = (
             "Hello! Welcome to AI SkillFit. I'm Priya, your interviewer today. "
-            "Could you please start by telling me your name?"
+            "Which language would you prefer for this interview? You can say English, Hindi, Kannada, Tamil, Telugu, Marathi, Bengali, Gujarati, Malayalam, Punjabi, or Odia."
         )
-        self.state["messages"] = [
-            {"role": "assistant", "content": greeting}
-        ]
         await self.session.say(greeting)
 
     async def on_user_turn_completed(self, turn_ctx, new_message):
         user_text = new_message.text_content
         if not user_text or not user_text.strip():
+            return
+
+        if not self.language_selected:
+            language = detect_language_preference(user_text)
+            if not language:
+                retry = (
+                    "Sorry, I could not clearly understand the language. "
+                    "Please say one language, for example Hindi, Kannada, Tamil, or English."
+                )
+                await self.session.say(retry)
+                return
+
+            language_code, language_name = language
+            self.set_tts_language(language_code, language_name)
+            self.language_selected = True
+
+            greeting = (
+                f"Great, we will continue in {language_name}. "
+                "Could you please start by telling me your name?"
+            )
+            self.state["messages"] = [
+                {"role": "assistant", "content": greeting}
+            ]
+            await self.say_in_preferred_language(greeting)
             return
 
         if self.state.get("phase") == "done":
@@ -144,7 +222,7 @@ class VoiceAgent(Agent):
         response = self.state.get("last_response", "")
         if response:
             logger.info(f"[Agent speaking] {response[:80]}")
-            await self.session.say(response)
+            await self.say_in_preferred_language(response)
 
 
 async def entrypoint(ctx: JobContext):
