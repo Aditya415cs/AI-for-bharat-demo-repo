@@ -1,5 +1,5 @@
 ﻿import React, { useState, useEffect, useRef, useCallback } from "react";
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Animated, Platform } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Animated, Platform, ScrollView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import {
@@ -18,6 +18,24 @@ import { AppButton } from "../../components/AppButton";
 import { startInterview, getResults, InterviewResult } from "../../services/interviewService";
 
 type InterviewState = "idle" | "connecting" | "active" | "completed" | "error";
+type TranscriptMessage = {
+  id: string;
+  speaker: "assistant" | "user";
+  text: string;
+  timestamp: number;
+};
+
+const TRANSCRIPT_TOPIC = "interview-transcript";
+
+const decodeTranscriptPayload = (payload: Uint8Array) => {
+  if (typeof TextDecoder !== "undefined") {
+    return new TextDecoder("utf-8").decode(payload);
+  }
+
+  return decodeURIComponent(
+    Array.from(payload, (byte) => `%${byte.toString(16).padStart(2, "0")}`).join("")
+  );
+};
 
 // Animated waveform bar
 const WaveBar = ({ active, delay }: { active: boolean; delay: number }) => {
@@ -46,9 +64,11 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
   const [micActive, setMicActive] = useState(false);
   const [fitmentResult, setFitmentResult] = useState<InterviewResult | null>(null);
   const [showEndConfirm, setShowEndConfirm] = useState(false);
+  const [transcriptMessages, setTranscriptMessages] = useState<TranscriptMessage[]>([]);
 
   const roomRef = useRef<Room | null>(null);
   const localAudioRef = useRef<LocalAudioTrack | null>(null);
+  const transcriptScrollRef = useRef<ScrollView | null>(null);
   // Track attached RemoteAudioTrack instances so we can detach on cleanup
   const remoteAudioTracksRef = useRef<RemoteAudioTrack[]>([]);
 
@@ -103,9 +123,17 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
     } catch {}
   }, [trade, candidateName]);
 
+  const appendTranscriptMessage = useCallback((message: TranscriptMessage) => {
+    setTranscriptMessages((current) => {
+      if (current.some((item) => item.id === message.id)) return current;
+      return [...current, message].slice(-40);
+    });
+  }, []);
+
   const handleStartInterview = useCallback(async () => {
     setInterviewState("connecting");
     setErrorMessage("");
+    setTranscriptMessages([]);
 
     // Request mic permission
     let micGranted = false;
@@ -163,6 +191,28 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
         setPriyaSpeaking(speakers.some((s) => s instanceof RemoteParticipant));
       });
 
+      room.on(RoomEvent.DataReceived, (payload: Uint8Array, _participant?: RemoteParticipant, _kind?: unknown, topic?: string) => {
+        if (topic !== TRANSCRIPT_TOPIC) return;
+
+        try {
+          const parsed = JSON.parse(decodeTranscriptPayload(payload));
+          if (
+            typeof parsed.id === "string" &&
+            (parsed.speaker === "assistant" || parsed.speaker === "user") &&
+            typeof parsed.text === "string"
+          ) {
+            appendTranscriptMessage({
+              id: parsed.id,
+              speaker: parsed.speaker,
+              text: parsed.text,
+              timestamp: typeof parsed.timestamp === "number" ? parsed.timestamp : Date.now(),
+            });
+          }
+        } catch (err) {
+          console.warn("[LiveKit] Failed to parse transcript payload:", err);
+        }
+      });
+
       // ── Room disconnected (Priya ended session or network drop) ─────────
       room.on(RoomEvent.Disconnected, async () => {
         detachAllRemoteAudio();
@@ -203,7 +253,7 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
       setErrorMessage(err.message ?? "Failed to connect to the interview room. Please try again.");
       setInterviewState("error");
     }
-  }, [candidateName, trade, phoneNumber, disconnectCleanly, fetchFitment, attachRemoteAudioTrack, detachAllRemoteAudio]);
+  }, [candidateName, trade, phoneNumber, disconnectCleanly, fetchFitment, attachRemoteAudioTrack, detachAllRemoteAudio, appendTranscriptMessage]);
 
   const confirmEndInterview = useCallback(async () => {
     setShowEndConfirm(false);
@@ -252,7 +302,11 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
 
       {/* ACTIVE */}
       {interviewState === "active" && (
-        <View style={styles.activeContainer}>
+        <ScrollView
+          style={styles.activeScroll}
+          contentContainerStyle={styles.activeContainer}
+          showsVerticalScrollIndicator
+        >
           <View style={styles.activeHeader}>
             <View style={styles.liveBadge}><View style={styles.liveDot} /><Text style={styles.liveText}>LIVE</Text></View>
             <Text style={styles.activeTitle}>Interview in Progress</Text>
@@ -264,6 +318,37 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
             <Text style={styles.priyaName}>Priya</Text>
             <Text style={styles.priyaStatus}>{priyaSpeaking ? "Speaking..." : "Listening to you"}</Text>
             <View style={styles.waveContainer}>{[0,1,2,3,4,5,6,7].map((i) => <WaveBar key={i} active={priyaSpeaking} delay={i * 60} />)}</View>
+          </View>
+          <View style={styles.transcriptSection}>
+            <View style={styles.transcriptHeader}>
+              <Ionicons name="document-text-outline" size={18} color={theme.colors.primary} />
+              <Text style={styles.transcriptTitle}>Live Transcript</Text>
+            </View>
+            <ScrollView
+              ref={transcriptScrollRef}
+              style={styles.transcriptList}
+              contentContainerStyle={styles.transcriptContent}
+              nestedScrollEnabled
+              showsVerticalScrollIndicator
+              onContentSizeChange={() => transcriptScrollRef.current?.scrollToEnd({ animated: true })}
+            >
+              {transcriptMessages.length === 0 ? (
+                <Text style={styles.transcriptEmpty}>Transcript will appear as you and Priya speak.</Text>
+              ) : (
+                transcriptMessages.map((message) => (
+                  <View
+                    key={message.id}
+                    style={[
+                      styles.transcriptBubble,
+                      message.speaker === "user" ? styles.userTranscriptBubble : styles.priyaTranscriptBubble,
+                    ]}
+                  >
+                    <Text style={styles.transcriptSpeaker}>{message.speaker === "user" ? "You" : "Priya"}</Text>
+                    <Text style={styles.transcriptText}>{message.text}</Text>
+                  </View>
+                ))
+              )}
+            </ScrollView>
           </View>
           <View style={styles.micSection}>
             <View style={[styles.micIndicator, micActive && styles.micIndicatorActive]}>
@@ -286,7 +371,7 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
           ) : (
             <AppButton title="End Interview" variant="outline" onPress={() => setShowEndConfirm(true)} style={styles.endBtn} textStyle={{ color: theme.colors.error }} />
           )}
-        </View>
+        </ScrollView>
       )}
 
       {/* COMPLETED */}
@@ -333,19 +418,31 @@ const styles = StyleSheet.create({
   infoRow: { flexDirection: "row", alignItems: "center", marginBottom: theme.spacing.sm },
   infoText: { marginLeft: 8, fontSize: 15, color: theme.colors.textSecondary, fontWeight: "500" },
   glowCircle: { width: 120, height: 120, borderRadius: 60, backgroundColor: "#eef2ff", justifyContent: "center", alignItems: "center", marginBottom: theme.spacing.xl },
-  activeContainer: { flex: 1, alignItems: "center", paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg },
+  activeScroll: { flex: 1 },
+  activeContainer: { flexGrow: 1, alignItems: "center", paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg },
   activeHeader: { flexDirection: "row", alignItems: "center", marginBottom: theme.spacing.xl },
   liveBadge: { flexDirection: "row", alignItems: "center", backgroundColor: "#fee2e2", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, marginRight: theme.spacing.sm },
   liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.error, marginRight: 4 },
   liveText: { fontSize: 10, fontWeight: "800", color: theme.colors.error, letterSpacing: 1 },
   activeTitle: { fontSize: 16, fontWeight: "600", color: theme.colors.text },
-  priyaSection: { alignItems: "center", flex: 1, justifyContent: "center" },
-  priyaAvatar: { width: 140, height: 140, borderRadius: 70, backgroundColor: theme.colors.primary, justifyContent: "center", alignItems: "center", marginBottom: theme.spacing.md, elevation: 8 },
+  priyaSection: { alignItems: "center", flex: 1, justifyContent: "center", minHeight: 170 },
+  priyaAvatar: { width: 120, height: 120, borderRadius: 60, backgroundColor: theme.colors.primary, justifyContent: "center", alignItems: "center", marginBottom: theme.spacing.md, elevation: 8 },
   priyaAvatarSpeaking: { backgroundColor: theme.colors.secondary },
   priyaName: { fontSize: 22, fontWeight: "700", color: theme.colors.text, marginBottom: 4 },
   priyaStatus: { fontSize: 14, color: theme.colors.textSecondary, marginBottom: theme.spacing.lg },
   waveContainer: { flexDirection: "row", alignItems: "center", height: 48 },
   waveBar: { width: 5, marginHorizontal: 3, borderRadius: 3 },
+  transcriptSection: { width: "100%", height: 300, backgroundColor: "#fff", borderRadius: theme.borderRadius.lg, borderWidth: 1, borderColor: theme.colors.border, marginBottom: theme.spacing.md, overflow: "hidden" },
+  transcriptHeader: { flexDirection: "row", alignItems: "center", paddingHorizontal: theme.spacing.md, paddingTop: theme.spacing.md, paddingBottom: theme.spacing.xs },
+  transcriptTitle: { marginLeft: 8, fontSize: 15, fontWeight: "700", color: theme.colors.text },
+  transcriptList: { flex: 1 },
+  transcriptContent: { paddingHorizontal: theme.spacing.md, paddingBottom: theme.spacing.md },
+  transcriptEmpty: { fontSize: 13, color: theme.colors.textSecondary, lineHeight: 19, paddingVertical: theme.spacing.md },
+  transcriptBubble: { paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm, borderRadius: theme.borderRadius.md, marginTop: theme.spacing.sm, borderWidth: 1 },
+  priyaTranscriptBubble: { alignSelf: "flex-start", backgroundColor: "#f8fafc", borderColor: theme.colors.border },
+  userTranscriptBubble: { alignSelf: "flex-end", backgroundColor: "#eef2ff", borderColor: "#c7d2fe" },
+  transcriptSpeaker: { fontSize: 11, fontWeight: "800", color: theme.colors.textSecondary, marginBottom: 3, textTransform: "uppercase" },
+  transcriptText: { fontSize: 14, lineHeight: 20, color: theme.colors.text },
   micSection: { flexDirection: "row", alignItems: "center", marginBottom: theme.spacing.lg, backgroundColor: "#fff", paddingHorizontal: theme.spacing.lg, paddingVertical: theme.spacing.md, borderRadius: theme.borderRadius.lg, borderWidth: 1, borderColor: theme.colors.border },
   micIndicator: { width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.border, justifyContent: "center", alignItems: "center", marginRight: theme.spacing.md },
   micIndicatorActive: { backgroundColor: theme.colors.secondary },

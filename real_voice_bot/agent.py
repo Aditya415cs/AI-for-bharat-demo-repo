@@ -2,6 +2,8 @@ import logging
 import asyncio
 import os
 import re
+import json
+import time
 from dotenv import load_dotenv
 
 from livekit import rtc
@@ -139,8 +141,11 @@ def run_interview_step(state: InterviewState) -> InterviewState:
     return state
 
 
+TRANSCRIPT_TOPIC = "interview-transcript"
+
+
 class VoiceAgent(Agent):
-    def __init__(self):
+    def __init__(self, room: rtc.Room):
         super().__init__(
             instructions="You are Priya, a warm interviewer for AI SkillFit.",
             stt=sarvam.STT(
@@ -160,6 +165,30 @@ class VoiceAgent(Agent):
         self.language_selected = False
         self.preferred_language_code = "en-IN"
         self.preferred_language_name = "English"
+        self.room = room
+
+    async def publish_transcript(self, speaker: str, text: str):
+        if not text or not text.strip():
+            return
+
+        payload = json.dumps(
+            {
+                "id": f"{speaker}-{int(time.time() * 1000)}",
+                "speaker": speaker,
+                "text": text.strip(),
+                "timestamp": int(time.time() * 1000),
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+
+        try:
+            await self.room.local_participant.publish_data(
+                payload,
+                reliable=True,
+                topic=TRANSCRIPT_TOPIC,
+            )
+        except Exception as exc:
+            logger.warning(f"[Transcript] Failed to publish transcript event: {exc}")
 
     def set_tts_language(self, language_code: str, language_name: str):
         self.preferred_language_code = language_code
@@ -169,6 +198,7 @@ class VoiceAgent(Agent):
 
     async def say_in_preferred_language(self, text: str):
         spoken_text = translate_for_tts(text, self.preferred_language_name)
+        await self.publish_transcript("assistant", spoken_text)
         await self.session.say(spoken_text)
 
     async def on_enter(self):
@@ -176,12 +206,15 @@ class VoiceAgent(Agent):
             "Hello! Welcome to AI SkillFit. I'm Priya, your interviewer today. "
             "Which language would you prefer for this interview? You can say English, Hindi, Kannada, Tamil, Telugu, Marathi, Bengali, Gujarati, Malayalam, Punjabi, or Odia."
         )
+        await self.publish_transcript("assistant", greeting)
         await self.session.say(greeting)
 
     async def on_user_turn_completed(self, turn_ctx, new_message):
         user_text = new_message.text_content
         if not user_text or not user_text.strip():
             return
+
+        await self.publish_transcript("user", user_text)
 
         if not self.language_selected:
             language = detect_language_preference(user_text)
@@ -190,6 +223,7 @@ class VoiceAgent(Agent):
                     "Sorry, I could not clearly understand the language. "
                     "Please say one language, for example Hindi, Kannada, Tamil, or English."
                 )
+                await self.publish_transcript("assistant", retry)
                 await self.session.say(retry)
                 return
 
@@ -234,7 +268,7 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         min_endpointing_delay=1.5,
     )
-    await session.start(agent=VoiceAgent(), room=ctx.room)
+    await session.start(agent=VoiceAgent(ctx.room), room=ctx.room)
 
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, agent_name="skillfit-agent"))
