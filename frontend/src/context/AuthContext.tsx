@@ -76,7 +76,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     if (lang === language) return; // Skip if same
 
     _setLanguage(lang);
-    await AsyncStorage.setItem('app_language', lang);
+    await AsyncStorage.setItem('language_preference', lang);
     
     // Sync to Supabase if logged in
     if (user) {
@@ -150,7 +150,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
     const init = async () => {
       // 1. Load language first
-      const storedLang = await AsyncStorage.getItem('app_language');
+      const storedLang = await AsyncStorage.getItem('language_preference');
       if (mounted && storedLang) _setLanguage(storedLang);
 
       // 2. Check session

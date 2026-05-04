@@ -1,9 +1,8 @@
 import React, { useContext, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView, Modal, FlatList } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { AuthContext } from '../../context/AuthContext';
-import { logoutUser } from '../../services/supabase/auth';
 import { theme } from '../../theme';
 import { AppCard } from '../../components/AppCard';
 import { AppButton } from '../../components/AppButton';
@@ -31,6 +30,19 @@ export const ProfileScreen: React.FC<any> = ({ navigation }) => {
     setLangModalVisible(false);
   };
 
+  const getTranslatedTrade = (trade: string) => {
+    if (!trade) return t('not_provided' as any);
+    const key = `trade_${trade.toLowerCase()}`;
+    const translated = t(key as any);
+    return translated === key ? trade : translated;
+  };
+
+  const getTranslatedExperience = (exp: string) => {
+    if (!exp) return t('not_provided' as any);
+    if (exp === 'Fresher') return t('exp_fresher' as any);
+    return `${exp} ${t('years' as any)}`;
+  };
+
   const currentLanguageLabel = LANGUAGES.find(l => l.id === language)?.native || 'English';
 
   const InfoRow = ({ label, value, icon }: { label: string; value?: string; icon: any }) => (
@@ -40,7 +52,7 @@ export const ProfileScreen: React.FC<any> = ({ navigation }) => {
       </View>
       <View style={styles.infoTextContainer}>
         <Text style={styles.infoLabel}>{label}</Text>
-        <Text style={styles.infoValue}>{value || 'Not provided'}</Text>
+        <Text style={styles.infoValue}>{value || t('not_provided' as any)}</Text>
       </View>
     </View>
   );
@@ -72,13 +84,13 @@ export const ProfileScreen: React.FC<any> = ({ navigation }) => {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>{t('personal_details')}</Text>
           <AppCard style={styles.infoCard} variant="outlined">
-            <InfoRow label="Phone" value={profile?.phone} icon="call-outline" />
+            <InfoRow label={t('phone_label' as any)} value={profile?.phone} icon="call-outline" />
             <View style={styles.divider} />
-            <InfoRow label="Age" value={profile?.age} icon="calendar-outline" />
+            <InfoRow label={t('age_label' as any)} value={profile?.age} icon="calendar-outline" />
             <View style={styles.divider} />
-            <InfoRow label="District" value={profile?.district} icon="location-outline" />
+            <InfoRow label={t('district_label' as any)} value={profile?.district} icon="location-outline" />
             <View style={styles.divider} />
-            <InfoRow label="Gender" value={profile?.gender} icon="person-outline" />
+            <InfoRow label={t('gender_label' as any)} value={profile?.gender} icon="person-outline" />
           </AppCard>
         </View>
 
@@ -86,18 +98,18 @@ export const ProfileScreen: React.FC<any> = ({ navigation }) => {
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>{t('work_skills')}</Text>
             <AppCard style={styles.infoCard} variant="outlined">
-              <InfoRow label="Trade" value={profile?.trade} icon="hammer-outline" />
+              <InfoRow label={t('trade_label' as any)} value={getTranslatedTrade(profile?.trade || '')} icon="hammer-outline" />
               <View style={styles.divider} />
-              <InfoRow label="Experience" value={profile?.experience_level ? `${profile.experience_level} years` : undefined} icon="briefcase-outline" />
+              <InfoRow label={t('experience_label' as any)} value={getTranslatedExperience(profile?.experience_level || '')} icon="briefcase-outline" />
               <View style={styles.divider} />
-              <InfoRow label="Work Preference" value={profile?.work_preference} icon="time-outline" />
+              <InfoRow label={t('work_pref_label' as any)} value={profile?.work_preference} icon="time-outline" />
               <View style={styles.divider} />
               <View style={styles.infoRow}>
                 <View style={styles.infoIcon}>
                   <Ionicons name="construct-outline" size={20} color={theme.colors.primary} />
                 </View>
                 <View style={styles.infoTextContainer}>
-                  <Text style={styles.infoLabel}>Skills</Text>
+                  <Text style={styles.infoLabel}>{t('skills_label' as any)}</Text>
                   <View style={styles.skillBadgeContainer}>
                     {profile?.skills && profile.skills.length > 0 ? (
                       profile.skills.map((s, i) => (
@@ -106,7 +118,7 @@ export const ProfileScreen: React.FC<any> = ({ navigation }) => {
                         </View>
                       ))
                     ) : (
-                      <Text style={styles.infoValue}>No skills added</Text>
+                      <Text style={styles.infoValue}>{t('no_skills_added' as any)}</Text>
                     )}
                   </View>
                 </View>
@@ -141,7 +153,6 @@ export const ProfileScreen: React.FC<any> = ({ navigation }) => {
         </View>
       </ScrollView>
 
-      {/* Language Modal */}
       <Modal
         visible={langModalVisible}
         transparent
@@ -154,7 +165,7 @@ export const ProfileScreen: React.FC<any> = ({ navigation }) => {
           onPress={() => setLangModalVisible(false)}
         >
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Select Language</Text>
+            <Text style={styles.modalTitle}>{t('app_language')}</Text>
             {LANGUAGES.map(item => (
               <TouchableOpacity 
                 key={item.id} 

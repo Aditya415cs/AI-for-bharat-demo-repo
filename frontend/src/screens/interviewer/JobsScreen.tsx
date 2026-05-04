@@ -1,25 +1,29 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../../theme';
 import { supabase } from '../../services/supabase/config';
 import { AppCard } from '../../components/AppCard';
+import { AuthContext } from '../../context/AuthContext';
 
 export const InterviewerJobsScreen = ({ navigation }: any) => {
+  const { user } = useContext(AuthContext);
   const [jobs, setJobs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchMyJobs();
-  }, []);
+    if (user) fetchMyJobs();
+  }, [user]);
 
   const fetchMyJobs = async () => {
+    if (!user) return;
     setLoading(true);
     try {
       const { data, error } = await supabase
         .from('jobs')
         .select('*, applications(count)')
+        .eq('created_by', user.id)
         .order('created_at', { ascending: false });
 
       if (error) throw error;

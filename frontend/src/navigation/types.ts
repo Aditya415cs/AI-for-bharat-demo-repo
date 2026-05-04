@@ -5,6 +5,8 @@ export type RootStackParamList = {
   LanguageSelection: undefined;
   RoleSelection: undefined;
   Onboarding: undefined;
+  EditProfile: undefined;
+  Help: undefined;
 };
 
 export type AuthStackParamList = {
@@ -22,6 +24,7 @@ export type MainStackParamList = {
   Result: { jobId: string; resultData: any };
   EditProfile: undefined;
   JobDetail: { jobId: string };
+  Help: undefined;
 };
 
 export type InterviewerStackParamList = {
@@ -30,6 +33,8 @@ export type InterviewerStackParamList = {
   JobApplicants: { jobId: string };
   CandidateDetail: { candidateId: string; jobId: string };
   EditJob: { jobId: string };
+  EditProfile: undefined;
+  Help: undefined;
 };
 
 export type InterviewerTabParamList = {

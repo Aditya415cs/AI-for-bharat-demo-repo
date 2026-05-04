@@ -1,28 +1,50 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, TextInput, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../../theme';
 import { supabase } from '../../services/supabase/config';
 import { AppCard } from '../../components/AppCard';
+import { AuthContext } from '../../context/AuthContext';
 
 export const InterviewerApplicantsScreen = ({ route, navigation }: any) => {
+  const { user } = useContext(AuthContext);
   const { jobId } = route.params || {};
   const [applicants, setApplicants] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all'); // all, pending, shortlisted, rejected
   
   useEffect(() => {
-    fetchApplicants();
+    if (user) fetchApplicants();
     const unsubscribe = navigation.addListener('focus', () => {
-      fetchApplicants();
+      if (user) fetchApplicants();
     });
     return unsubscribe;
-  }, [navigation, jobId]);
+  }, [navigation, jobId, user]);
 
   const fetchApplicants = async () => {
+    if (!user) return;
     setLoading(true);
     try {
+      // If no specific jobId is provided, we first need to find all jobs owned by this interviewer
+      let targetJobIds = jobId ? [jobId] : [];
+      
+      if (!jobId) {
+        const { data: myJobs } = await supabase
+          .from('jobs')
+          .select('id')
+          .eq('created_by', user.id);
+        
+        if (myJobs && myJobs.length > 0) {
+          targetJobIds = myJobs.map(j => j.id);
+        } else {
+          // No jobs owned, so no applicants to show
+          setApplicants([]);
+          setLoading(false);
+          return;
+        }
+      }
+
       let query = supabase
         .from('applications')
         .select(`
@@ -36,11 +58,8 @@ export const InterviewerApplicantsScreen = ({ route, navigation }: any) => {
             district,
             interviews (score, classification, confidence_score, job_id)
           )
-        `);
-
-      if (jobId) {
-        query = query.eq('job_id', jobId);
-      }
+        `)
+        .in('job_id', targetJobIds);
 
       const { data, error } = await query;
 

@@ -20,7 +20,6 @@ export const JobBrowsingScreen = ({ navigation }: any) => {
   const fetchJobs = async () => {
     setLoading(true);
     try {
-      // 1. Fetch blocked company IDs for this user
       const { data: blockedData } = await supabase
         .from('blocked_candidates')
         .select('company_id')
@@ -28,7 +27,6 @@ export const JobBrowsingScreen = ({ navigation }: any) => {
       
       const blockedCompanyIds = blockedData?.map(b => b.company_id) || [];
 
-      // 2. Fetch jobs not from blocked companies
       let query = supabase
         .from('jobs')
         .select('*, companies(company_name)')
@@ -49,6 +47,19 @@ export const JobBrowsingScreen = ({ navigation }: any) => {
     }
   };
 
+  const getTranslatedTrade = (trade: string) => {
+    if (!trade) return '';
+    const key = `trade_${trade.toLowerCase()}`;
+    const translated = t(key as any);
+    return translated === key ? trade : translated;
+  };
+
+  const getTranslatedExperience = (exp: string) => {
+    if (!exp) return '';
+    if (exp === 'Fresher') return t('exp_fresher' as any);
+    return exp.replace('years', t('years' as any));
+  };
+
   const filteredJobs = jobs.filter(job => 
     job.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
     job.trade.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -66,7 +77,7 @@ export const JobBrowsingScreen = ({ navigation }: any) => {
           <Text style={styles.companyName}>{item.companies?.company_name}</Text>
         </View>
         <View style={styles.statusBadge}>
-          <Text style={styles.statusText}>{item.trade}</Text>
+          <Text style={styles.statusText}>{getTranslatedTrade(item.trade)}</Text>
         </View>
       </View>
       
@@ -77,17 +88,17 @@ export const JobBrowsingScreen = ({ navigation }: any) => {
         </View>
         <View style={styles.infoItem}>
           <Ionicons name="briefcase-outline" size={16} color={theme.colors.textSecondary} />
-          <Text style={styles.infoText}>{item.experience_required}</Text>
+          <Text style={styles.infoText}>{getTranslatedExperience(item.experience_required)}</Text>
         </View>
       </View>
 
       <View style={styles.footer}>
-        <Text style={styles.salaryText}>{item.openings} Openings</Text>
+        <Text style={styles.salaryText}>{item.openings} {t('openings' as any)}</Text>
         <TouchableOpacity 
           style={styles.applyBtn}
           onPress={() => navigation.navigate('JobDetail', { jobId: item.id })}
         >
-          <Text style={styles.applyBtnText}>View Details</Text>
+          <Text style={styles.applyBtnText}>{t('view_details' as any)}</Text>
         </TouchableOpacity>
       </View>
     </AppCard>
@@ -96,15 +107,15 @@ export const JobBrowsingScreen = ({ navigation }: any) => {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Available Jobs</Text>
-        <Text style={styles.headerSubtitle}>Find your next opportunity</Text>
+        <Text style={styles.headerTitle}>{t('available_jobs' as any)}</Text>
+        <Text style={styles.headerSubtitle}>{t('find_opportunity' as any)}</Text>
       </View>
 
       <View style={styles.searchContainer}>
         <Ionicons name="search" size={20} color={theme.colors.textSecondary} style={styles.searchIcon} />
         <TextInput
           style={styles.searchInput}
-          placeholder="Search by title, trade, or company..."
+          placeholder={t('search_placeholder' as any)}
           value={searchQuery}
           onChangeText={setSearchQuery}
         />
@@ -124,7 +135,7 @@ export const JobBrowsingScreen = ({ navigation }: any) => {
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
               <Ionicons name="briefcase-outline" size={48} color={theme.colors.border} />
-              <Text style={styles.emptyText}>No jobs found matching your search.</Text>
+              <Text style={styles.emptyText}>{t('no_jobs_found' as any)}</Text>
             </View>
           }
         />

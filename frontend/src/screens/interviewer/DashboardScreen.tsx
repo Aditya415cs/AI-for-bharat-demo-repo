@@ -8,7 +8,7 @@ import { AppCard } from '../../components/AppCard';
 import { supabase } from '../../services/supabase/config';
 
 export const InterviewerDashboardScreen = ({ navigation }: any) => {
-  const { profile, t } = useContext(AuthContext);
+  const { user, profile, t } = useContext(AuthContext);
   const [stats, setStats] = useState({
     totalJobs: 0,
     totalApplicants: 0,
@@ -17,24 +17,33 @@ export const InterviewerDashboardScreen = ({ navigation }: any) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchStats();
-  }, []);
+    if (user) fetchStats();
+  }, [user]);
 
   const fetchStats = async () => {
+    if (!user) return;
     try {
-      // In a real app, these would be real queries. For now, we mock or count.
-      const { count: jobsCount } = await supabase
+      // 1. Fetch count of jobs created by this user
+      const { count: jobsCount, data: userJobs } = await supabase
         .from('jobs')
-        .select('*', { count: 'exact', head: true });
+        .select('id', { count: 'exact' })
+        .eq('created_by', user.id);
         
-      const { count: appCount } = await supabase
-        .from('applications')
-        .select('*', { count: 'exact', head: true });
+      // 2. Fetch count of applications for those jobs
+      let appCount = 0;
+      if (userJobs && userJobs.length > 0) {
+        const jobIds = userJobs.map(j => j.id);
+        const { count } = await supabase
+          .from('applications')
+          .select('*', { count: 'exact', head: true })
+          .in('job_id', jobIds);
+        appCount = count || 0;
+      }
 
       setStats({
         totalJobs: jobsCount || 0,
-        totalApplicants: appCount || 0,
-        jobReady: Math.floor((appCount || 0) * 0.4), // Mock calculation
+        totalApplicants: appCount,
+        jobReady: Math.floor(appCount * 0.4), // Mock calculation for "Job-Ready"
       });
     } catch (error) {
       console.error('Error fetching stats:', error);
@@ -51,9 +60,17 @@ export const InterviewerDashboardScreen = ({ navigation }: any) => {
             <Text style={styles.greeting}>Welcome, {profile?.full_name?.split(' ')[0] || 'Interviewer'} 🏢</Text>
             <Text style={styles.subtitle}>Manage your job postings and candidates</Text>
           </View>
-          <TouchableOpacity onPress={() => navigation.navigate('Profile')}>
-            <Ionicons name="person-circle" size={40} color={theme.colors.primary} />
-          </TouchableOpacity>
+          <View style={styles.headerRight}>
+            <TouchableOpacity 
+              onPress={() => navigation.navigate('Help')}
+              style={styles.helpBtn}
+            >
+              <Ionicons name="help-circle-outline" size={28} color={theme.colors.accent} />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => navigation.navigate('Profile')}>
+              <Ionicons name="person-circle" size={40} color={theme.colors.primary} />
+            </TouchableOpacity>
+          </View>
         </View>
 
         {loading ? (
@@ -101,7 +118,7 @@ export const InterviewerDashboardScreen = ({ navigation }: any) => {
                     <View style={[styles.actionIcon, { backgroundColor: '#f0f9ff' }]}>
                       <Ionicons name="list" size={28} color="#0ea5e9" />
                     </View>
-                    <Text style={styles.actionText}>View All Jobs</Text>
+                    <Text style={styles.actionText}>View My Jobs</Text>
                   </AppCard>
                 </TouchableOpacity>
               </View>
@@ -126,6 +143,14 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 32,
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  helpBtn: {
+    padding: 4,
   },
   greeting: {
     fontSize: 24,

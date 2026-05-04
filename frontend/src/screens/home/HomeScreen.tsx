@@ -130,7 +130,11 @@ export const HomeScreen: React.FC<any> = ({ navigation }) => {
             </AppCard>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.gridItem} activeOpacity={0.7}>
+          <TouchableOpacity 
+            style={styles.gridItem} 
+            activeOpacity={0.7}
+            onPress={() => navigation.navigate('Help')}
+          >
             <AppCard style={styles.gridCard} variant="outlined">
               <View style={[styles.iconBox, { backgroundColor: '#fff7ed' }]}>
                 <Ionicons name="help-circle" size={24} color={theme.colors.accent} />
