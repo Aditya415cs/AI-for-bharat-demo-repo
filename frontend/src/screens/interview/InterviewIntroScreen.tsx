@@ -1,13 +1,15 @@
-import React from 'react';
+import React, { useContext } from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../../theme';
 import { AppButton } from '../../components/AppButton';
 import { AppCard } from '../../components/AppCard';
+import { AuthContext } from '../../context/AuthContext';
 
 export const InterviewIntroScreen: React.FC<any> = ({ navigation, route }) => {
   const { jobId } = route.params || {};
+  const { profile } = useContext(AuthContext);
   const instructions = [
     {
       icon: 'videocam',
@@ -72,7 +74,12 @@ export const InterviewIntroScreen: React.FC<any> = ({ navigation, route }) => {
       <View style={styles.footer}>
         <AppButton 
           title="Begin Interview" 
-          onPress={() => navigation.navigate('Interview', { jobId })}
+          onPress={() => navigation.navigate('Interview', { 
+            jobId,
+            candidateName: profile?.full_name ?? 'Candidate',
+            trade: profile?.trade ?? 'General',
+            phoneNumber: profile?.phone ?? '',
+          })}
           style={styles.beginBtn}
         />
       </View>

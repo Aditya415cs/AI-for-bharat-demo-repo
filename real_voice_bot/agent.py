@@ -4,7 +4,8 @@ import os
 import re
 from dotenv import load_dotenv
 
-from livekit.agents import JobContext, WorkerOptions, cli
+from livekit import rtc
+from livekit.agents import JobContext, WorkerOptions, cli, AutoSubscribe
 from livekit.agents.voice import Agent, AgentSession
 from livekit.plugins import sarvam
 
@@ -226,15 +227,14 @@ class VoiceAgent(Agent):
 
 
 async def entrypoint(ctx: JobContext):
-    # Connect to the LiveKit room 
-    await ctx.connect()
+    # Connect to the LiveKit room — audio only, no video
+    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
     logger.info(f"Room connected: {ctx.room.name}")
     session = AgentSession(
-        turn_detection="stt",
         min_endpointing_delay=1.5,
     )
     await session.start(agent=VoiceAgent(), room=ctx.room)
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, agent_name="skillfit-agent"))

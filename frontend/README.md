@@ -1,121 +1,37 @@
-# AI SkillFit – Frontend Prototype
+# AI SkillFit — Frontend
 
-### Mobile & Dashboard UI for AI-Based Workforce Assessment
+React Native (Expo) mobile and web app for the AI SkillFit voice interview platform.
 
----
-
-## 🚀 Overview
-
-AI SkillFit is a mobile-first system designed to conduct structured video interviews and help classify candidates into workforce categories.
-
-This implementation focuses on building the **frontend interface and user experience**, covering both candidate interaction and interviewer decision workflows.
-
-AI evaluation, voice processing, and verification are represented as UI flows and are intended to be integrated separately.
+For full setup instructions, prerequisites, and how to run the project, see the **[root README](../README.md)**.
 
 ---
 
-## 🎯 Scope
+## Quick Start
 
-This prototype demonstrates:
+```bash
+# Install dependencies
+npm install
 
-* Multilingual onboarding
-* Interview interaction flow (UI)
-* Candidate classification display
-* Interviewer dashboard for managing applicants
+# Copy env template and fill in values
+cp .env.example .env
 
----
+# Run on web (recommended for development)
+npx expo start --web
 
-## 🛠️ Tech Stack
+# Run on Android
+npx expo start --android
 
-### Frontend
+# Run on iOS
+npx expo start --ios
+```
 
-* React Native (Expo)
-* JavaScript
+## Environment Variables
 
-### Backend Integration (Structured for)
+Copy `.env.example` to `.env`:
 
-* Supabase
+```env
+EXPO_PUBLIC_BACKEND_URL=http://localhost:8000
+EXPO_PUBLIC_BACKEND_API_KEY=skillfit-local
+```
 
-  * Authentication
-  * Database (users, jobs, applications, interviews)
-
-### Design
-
-* Component-based UI
-* Mobile-first approach
-* Role-based navigation
-
----
-
-## 📱 Candidate App
-
-### Language Selection
-
-* English
-* ಕನ್ನಡ (Kannada)
-* हिंदी (Hindi)
-
----
-
-### Profile Onboarding
-
-* Multi-step form capturing basic user details
-* Trade and experience selection
-
----
-
-### Interview Flow (UI Simulation)
-
-* Camera preview layout
-* Question display
-* Voice interaction controls
-* Progress tracking
-
----
-
-### Results Screen
-
-* Displays classification:
-
-  * Job-Ready
-  * Requires Training
-  * Manual Verification
-  * Low Confidence
-  * Suspected Fraud
-* Includes confidence score
-
----
-
-## 🧑💼 Interviewer Dashboard
-
-### Job Management
-
-* Create and view job openings
-
----
-
-### Applicants View
-
-* List of candidates per job
-* Displays:
-
-  * Score
-  * Classification
-  * Confidence score
-
----
-
-### Ranking & Actions
-
-* Candidates ranked by score
-
-* Actions:
-
-  * Shortlist
-  * Reject
-
-
-
-## 🏁 Summary
-
-This frontend prototype demonstrates a **complete interface layer** for AI SkillFit, enabling structured candidate interaction and streamlined evaluation workflows.
+See the [root README](../README.md) for full details.

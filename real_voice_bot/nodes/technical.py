@@ -3,6 +3,7 @@ import json
 import re
 from nodes.utils import get_llm, build_messages, strip_tag, load_questions_for_trade
 from state import InterviewState
+from database import save_result
 
 logger = logging.getLogger("skillfit.technical")
 
@@ -321,6 +322,21 @@ def close_interview_node(state: InterviewState) -> InterviewState:
         fitment = "Requires Significant Upskilling"
 
     logger.info(f"[Close] Candidate: {candidate_info} | Avg: {avg} | Fitment: {fitment} | Weak: {weak_topics}")
+
+    # ── Persist results to SQLite ──
+    try:
+        record_id = save_result(
+            candidate_name=candidate_info.get("name", "Unknown"),
+            phone_number=candidate_info.get("phone_number", ""),
+            trade=candidate_info.get("trade", ""),
+            scores=scores,
+            weak_topics=weak_topics,
+            fitment=fitment,
+            average_score=avg,
+        )
+        logger.info(f"[Close] Results saved to DB — record ID: {record_id}")
+    except Exception as e:
+        logger.error(f"[Close] Failed to save results to DB: {e}")
 
     # Generate a warm, personalized closing
     close_llm = get_llm(temperature=0.7, max_tokens=200)

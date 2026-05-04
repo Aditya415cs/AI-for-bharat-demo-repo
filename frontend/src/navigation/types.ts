@@ -19,9 +19,14 @@ export type MainStackParamList = {
   HomeTabs: undefined;
   Onboarding: undefined;
   InterviewIntro: { jobId?: string } | undefined;
-  Interview: { jobId?: string };
+  Interview: { 
+    jobId?: string;
+    candidateName: string;
+    trade: string;
+    phoneNumber: string;
+  };
   Processing: { jobId: string };
-  Result: { jobId: string; resultData: any };
+  Result: { jobId?: string; resultData: any };
   EditProfile: undefined;
   JobDetail: { jobId: string };
   Help: undefined;
