@@ -1,288 +1,368 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
-import { theme } from '../../theme';
-import { AppButton } from '../../components/AppButton';
+﻿import React, { useState, useEffect, useRef, useCallback } from "react";
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Animated, Platform } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
+import {
+  Room,
+  RoomEvent,
+  ConnectionState,
+  createLocalAudioTrack,
+  LocalAudioTrack,
+  RemoteParticipant,
+  RemoteAudioTrack,
+  Track,
+  RemoteTrackPublication,
+} from "livekit-client";
+import { theme } from "../../theme";
+import { AppButton } from "../../components/AppButton";
+import { startInterview, getResults, InterviewResult } from "../../services/interviewService";
 
-const { width } = Dimensions.get('window');
+type InterviewState = "idle" | "connecting" | "active" | "completed" | "error";
+
+// Animated waveform bar
+const WaveBar = ({ active, delay }: { active: boolean; delay: number }) => {
+  const anim = useRef(new Animated.Value(4)).current;
+  useEffect(() => {
+    if (active) {
+      const loop = Animated.loop(Animated.sequence([
+        Animated.timing(anim, { toValue: 32, duration: 400, useNativeDriver: false, delay }),
+        Animated.timing(anim, { toValue: 4, duration: 400, useNativeDriver: false }),
+      ]));
+      loop.start();
+      return () => loop.stop();
+    } else {
+      Animated.timing(anim, { toValue: 4, duration: 200, useNativeDriver: false }).start();
+    }
+  }, [active]);
+  return <Animated.View style={[styles.waveBar, { height: anim, backgroundColor: active ? theme.colors.primary : theme.colors.border }]} />;
+};
 
 export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
-  const { jobId } = route.params || {};
-  const [isRecording, setIsRecording] = useState(false);
-  const [currentQuestion, setCurrentQuestion] = useState(2);
-  const totalQuestions = 10;
+  const { jobId, candidateName = "Candidate", trade = "General", phoneNumber = "" } = route.params || {};
+
+  const [interviewState, setInterviewState] = useState<InterviewState>("idle");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [priyaSpeaking, setPriyaSpeaking] = useState(false);
+  const [micActive, setMicActive] = useState(false);
+  const [fitmentResult, setFitmentResult] = useState<InterviewResult | null>(null);
+  const [showEndConfirm, setShowEndConfirm] = useState(false);
+
+  const roomRef = useRef<Room | null>(null);
+  const localAudioRef = useRef<LocalAudioTrack | null>(null);
+  // Track attached RemoteAudioTrack instances so we can detach on cleanup
+  const remoteAudioTracksRef = useRef<RemoteAudioTrack[]>([]);
+
+  useEffect(() => {
+    return () => { disconnectCleanly(); };
+  }, []);
+
+  /**
+   * Attach a RemoteAudioTrack using LiveKit's own .attach() method.
+   * This is the correct way — it handles codec negotiation, AudioContext,
+   * and appends its own <audio> element to the DOM automatically.
+   */
+  const attachRemoteAudioTrack = useCallback((track: RemoteAudioTrack) => {
+    if (Platform.OS !== "web") return;
+    try {
+      // attach() with no args creates and appends an <audio> element internally
+      const el = track.attach();
+      // Ensure it is in the DOM and autoplays
+      if (el && !document.body.contains(el)) {
+        el.style.display = "none";
+        document.body.appendChild(el);
+      }
+      remoteAudioTracksRef.current.push(track);
+      console.log("[LiveKit] Remote audio track attached");
+    } catch (e) {
+      console.warn("[LiveKit] Failed to attach remote audio track:", e);
+    }
+  }, []);
+
+  const detachAllRemoteAudio = useCallback(() => {
+    remoteAudioTracksRef.current.forEach((track) => {
+      try {
+        track.detach().forEach((el) => el.remove());
+      } catch {}
+    });
+    remoteAudioTracksRef.current = [];
+  }, []);
+
+  const disconnectCleanly = useCallback(async () => {
+    detachAllRemoteAudio();
+    try {
+      if (localAudioRef.current) { localAudioRef.current.stop(); localAudioRef.current = null; }
+      if (roomRef.current) { await roomRef.current.disconnect(); roomRef.current = null; }
+    } catch {}
+  }, [detachAllRemoteAudio]);
+
+  const fetchFitment = useCallback(async () => {
+    try {
+      const results = await getResults(trade);
+      const mine = results.find((r) => r.candidate_name?.toLowerCase() === candidateName?.toLowerCase());
+      if (mine) setFitmentResult(mine);
+    } catch {}
+  }, [trade, candidateName]);
+
+  const handleStartInterview = useCallback(async () => {
+    setInterviewState("connecting");
+    setErrorMessage("");
+
+    // Request mic permission
+    let micGranted = false;
+    try {
+      if (typeof navigator !== "undefined" && navigator.mediaDevices) {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach((t) => t.stop());
+        micGranted = true;
+      } else {
+        const { Audio } = await import("expo-av");
+        const { status } = await Audio.requestPermissionsAsync();
+        micGranted = status === "granted";
+      }
+    } catch { micGranted = false; }
+
+    if (!micGranted) {
+      setErrorMessage("Microphone access is required. Please allow microphone permission in your browser settings and try again.");
+      setInterviewState("error");
+      return;
+    }
+
+    // Call backend to create room + dispatch Priya
+    let credentials: { token: string; url: string; room: string };
+    try {
+      credentials = await startInterview({ candidate_name: candidateName, trade, phone_number: phoneNumber });
+    } catch (err: any) {
+      setErrorMessage(err.message ?? "Failed to start interview. Please try again.");
+      setInterviewState("error");
+      return;
+    }
+
+    // Connect to LiveKit room
+    try {
+      const room = new Room({ adaptiveStream: false, dynacast: false });
+      roomRef.current = room;
+
+      // ── Handle remote audio tracks ──────────────────────────────────────
+      // Attach tracks that are already published when we join
+      room.on(RoomEvent.TrackSubscribed, (track, _pub: RemoteTrackPublication, _participant: RemoteParticipant) => {
+        if (track.kind === Track.Kind.Audio) {
+          attachRemoteAudioTrack(track as RemoteAudioTrack);
+        }
+      });
+
+      // Detach when a track is unsubscribed
+      room.on(RoomEvent.TrackUnsubscribed, (track) => {
+        if (track.kind === Track.Kind.Audio) {
+          try { (track as RemoteAudioTrack).detach().forEach((el) => el.remove()); } catch {}
+          remoteAudioTracksRef.current = remoteAudioTracksRef.current.filter((t) => t !== track);
+        }
+      });
+
+      // ── Speaking indicator ──────────────────────────────────────────────
+      room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
+        setPriyaSpeaking(speakers.some((s) => s instanceof RemoteParticipant));
+      });
+
+      // ── Room disconnected (Priya ended session or network drop) ─────────
+      room.on(RoomEvent.Disconnected, async () => {
+        detachAllRemoteAudio();
+        setMicActive(false);
+        setPriyaSpeaking(false);
+        setInterviewState("completed");
+        await fetchFitment();
+      });
+
+      // ── Connection state ────────────────────────────────────────────────
+      room.on(RoomEvent.ConnectionStateChanged, (state: ConnectionState) => {
+        if (state === ConnectionState.Connected) setInterviewState("active");
+      });
+
+      await room.connect(credentials.url, credentials.token, { autoSubscribe: true });
+
+      // Also attach any tracks already present after connecting
+      room.remoteParticipants.forEach((participant) => {
+        participant.trackPublications.forEach((pub) => {
+          if (pub.track && pub.track.kind === Track.Kind.Audio) {
+            attachRemoteAudioTrack(pub.track as RemoteAudioTrack);
+          }
+        });
+      });
+
+      // Publish local mic
+      const audioTrack = await createLocalAudioTrack({
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      });
+      localAudioRef.current = audioTrack;
+      await room.localParticipant.publishTrack(audioTrack);
+      setMicActive(true);
+
+    } catch (err: any) {
+      await disconnectCleanly();
+      setErrorMessage(err.message ?? "Failed to connect to the interview room. Please try again.");
+      setInterviewState("error");
+    }
+  }, [candidateName, trade, phoneNumber, disconnectCleanly, fetchFitment, attachRemoteAudioTrack, detachAllRemoteAudio]);
+
+  const confirmEndInterview = useCallback(async () => {
+    setShowEndConfirm(false);
+    await disconnectCleanly();
+    setMicActive(false);
+    setPriyaSpeaking(false);
+    setInterviewState("completed");
+    await fetchFitment();
+  }, [disconnectCleanly, fetchFitment]);
+
+  const handleViewResult = useCallback(() => {
+    const resultData = fitmentResult
+      ? { status: fitmentResult.fitment, score: Math.round(fitmentResult.average_score), feedback: { strengths: [], improvements: fitmentResult.weak_topics ?? [] } }
+      : { status: "Interview Complete", score: 0, feedback: { strengths: [], improvements: [] } };
+    navigation.navigate("Result", { jobId, resultData });
+  }, [fitmentResult, jobId, navigation]);
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header with Progress */}
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.closeBtn}>
-          <Ionicons name="close" size={24} color={theme.colors.text} />
+      {interviewState !== "active" && interviewState !== "connecting" && (
+        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+          <Ionicons name="chevron-back" size={24} color={theme.colors.text} />
         </TouchableOpacity>
-        <View style={styles.progressContainer}>
-          <View style={styles.progressBar}>
-            <View style={[styles.progressFill, { width: `${(currentQuestion / totalQuestions) * 100}%` }]} />
+      )}
+
+      {/* IDLE */}
+      {interviewState === "idle" && (
+        <View style={styles.centered}>
+          <View style={styles.avatarCircle}><Ionicons name="headset" size={64} color={theme.colors.primary} /></View>
+          <Text style={styles.title}>Meet Priya</Text>
+          <Text style={styles.subtitle}>Your AI interviewer is ready. She will ask you questions about your trade. Speak naturally — there are no wrong answers.</Text>
+          <View style={styles.infoRow}><Ionicons name="person-outline" size={16} color={theme.colors.textSecondary} /><Text style={styles.infoText}>{candidateName}</Text></View>
+          <View style={styles.infoRow}><Ionicons name="hammer-outline" size={16} color={theme.colors.textSecondary} /><Text style={styles.infoText}>{trade}</Text></View>
+          <AppButton title="Start Interview" onPress={handleStartInterview} style={styles.primaryBtn} />
+        </View>
+      )}
+
+      {/* CONNECTING */}
+      {interviewState === "connecting" && (
+        <View style={styles.centered}>
+          <View style={styles.glowCircle}><ActivityIndicator size="large" color={theme.colors.primary} /></View>
+          <Text style={styles.title}>Connecting to Priya...</Text>
+          <Text style={styles.subtitle}>Setting up your interview room. This takes a moment.</Text>
+        </View>
+      )}
+
+      {/* ACTIVE */}
+      {interviewState === "active" && (
+        <View style={styles.activeContainer}>
+          <View style={styles.activeHeader}>
+            <View style={styles.liveBadge}><View style={styles.liveDot} /><Text style={styles.liveText}>LIVE</Text></View>
+            <Text style={styles.activeTitle}>Interview in Progress</Text>
           </View>
-          <Text style={styles.progressText}>{currentQuestion}/{totalQuestions}</Text>
-        </View>
-        <View style={styles.statusIndicator}>
-          <View style={styles.pulse} />
-          <Text style={styles.statusText}>LIVE</Text>
-        </View>
-      </View>
-
-      {/* Camera Preview Area (Mock) */}
-      <View style={styles.cameraContainer}>
-        <View style={styles.cameraMock}>
-          <Ionicons name="person" size={120} color="rgba(255,255,255,0.3)" />
-          <View style={styles.cameraOverlay}>
-            <Text style={styles.overlayText}>Camera Active</Text>
+          <View style={styles.priyaSection}>
+            <View style={[styles.priyaAvatar, priyaSpeaking && styles.priyaAvatarSpeaking]}>
+              <Ionicons name="sparkles" size={48} color="#fff" />
+            </View>
+            <Text style={styles.priyaName}>Priya</Text>
+            <Text style={styles.priyaStatus}>{priyaSpeaking ? "Speaking..." : "Listening to you"}</Text>
+            <View style={styles.waveContainer}>{[0,1,2,3,4,5,6,7].map((i) => <WaveBar key={i} active={priyaSpeaking} delay={i * 60} />)}</View>
           </View>
-        </View>
-      </View>
-
-      {/* AI Question Section */}
-      <View style={styles.questionSection}>
-        <View style={styles.aiLabel}>
-          <Ionicons name="sparkles" size={16} color={theme.colors.primary} />
-          <Text style={styles.aiLabelText}>AI INTERVIEWER</Text>
-        </View>
-        <Text style={styles.questionText}>
-          "Tell me about a time when you had to deal with a difficult colleague. How did you resolve the situation?"
-        </Text>
-        
-        {/* Waveform Mock */}
-        <View style={styles.waveformContainer}>
-          {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
-            <View 
-              key={i} 
-              style={[
-                styles.waveformBar, 
-                { 
-                  height: isRecording ? 10 + Math.random() * 30 : 4,
-                  backgroundColor: isRecording ? theme.colors.primary : theme.colors.border
-                }
-              ]} 
-            />
-          ))}
-        </View>
-      </View>
-
-      {/* Bottom Controls */}
-      <View style={styles.controls}>
-        <View style={styles.secondaryActions}>
-          <TouchableOpacity style={styles.actionCircle}>
-            <Ionicons name="refresh" size={24} color={theme.colors.textSecondary} />
-            <Text style={styles.actionLabel}>Repeat</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.actionCircle}>
-            <Ionicons name="play-skip-forward" size={24} color={theme.colors.textSecondary} />
-            <Text style={styles.actionLabel}>Skip</Text>
-          </TouchableOpacity>
-        </View>
-
-        <TouchableOpacity 
-          style={[styles.micButton, isRecording && styles.micButtonActive]}
-          onPress={() => setIsRecording(!isRecording)}
-          activeOpacity={0.7}
-        >
-          <View style={[styles.micInner, isRecording && styles.micInnerActive]}>
-            <Ionicons name={isRecording ? "stop" : "mic"} size={32} color="#fff" />
+          <View style={styles.micSection}>
+            <View style={[styles.micIndicator, micActive && styles.micIndicatorActive]}>
+              <Ionicons name={micActive ? "mic" : "mic-off"} size={28} color={micActive ? "#fff" : theme.colors.textSecondary} />
+            </View>
+            <Text style={styles.micLabel}>{micActive ? "Your microphone is active" : "Microphone off"}</Text>
           </View>
-          {isRecording && <View style={styles.micPulse} />}
-        </TouchableOpacity>
+          {showEndConfirm ? (
+            <View style={styles.confirmBox}>
+              <Text style={styles.confirmText}>End the interview?</Text>
+              <View style={styles.confirmButtons}>
+                <TouchableOpacity style={styles.confirmCancel} onPress={() => setShowEndConfirm(false)}>
+                  <Text style={styles.confirmCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.confirmEnd} onPress={confirmEndInterview}>
+                  <Text style={styles.confirmEndText}>End Interview</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <AppButton title="End Interview" variant="outline" onPress={() => setShowEndConfirm(true)} style={styles.endBtn} textStyle={{ color: theme.colors.error }} />
+          )}
+        </View>
+      )}
 
-        <AppButton 
-          title="Finish" 
-          variant="ghost" 
-          onPress={() => navigation.navigate('Processing', { jobId })}
-          style={styles.finishBtn}
-          textStyle={{ color: theme.colors.error }}
-        />
-      </View>
+      {/* COMPLETED */}
+      {interviewState === "completed" && (
+        <View style={styles.centered}>
+          <Ionicons name="checkmark-circle" size={72} color={theme.colors.secondary} style={styles.successIcon} />
+          <Text style={styles.title}>Interview Complete!</Text>
+          <Text style={styles.subtitle}>Thank you, {candidateName}. Priya has finished evaluating your responses.</Text>
+          <View style={styles.fitmentCard}>
+            {fitmentResult ? (
+              <><Text style={styles.fitmentLabel}>Your Fitment</Text><Text style={styles.fitmentValue}>{fitmentResult.fitment}</Text><Text style={styles.fitmentScore}>Score: {Math.round(fitmentResult.average_score)}%</Text></>
+            ) : (
+              <><ActivityIndicator size="small" color={theme.colors.primary} /><Text style={styles.fitmentLabel}>Fetching your result...</Text></>
+            )}
+          </View>
+          <AppButton title="View Full Result" onPress={handleViewResult} style={styles.primaryBtn} />
+          <AppButton title="Back to Home" variant="ghost" onPress={() => navigation.navigate("HomeTabs")} style={styles.ghostBtn} textStyle={{ color: theme.colors.textSecondary }} />
+        </View>
+      )}
+
+      {/* ERROR */}
+      {interviewState === "error" && (
+        <View style={styles.centered}>
+          <Ionicons name="alert-circle" size={64} color={theme.colors.error} style={styles.errorIcon} />
+          <Text style={styles.title}>Something went wrong</Text>
+          <Text style={styles.errorMessage}>{errorMessage}</Text>
+          <AppButton title="Try Again" onPress={handleStartInterview} style={styles.primaryBtn} />
+          <AppButton title="Go Back" variant="ghost" onPress={() => navigation.goBack()} style={styles.ghostBtn} textStyle={{ color: theme.colors.textSecondary }} />
+        </View>
+      )}
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: theme.spacing.md,
-    height: 60,
-    justifyContent: 'space-between',
-  },
-  closeBtn: {
-    padding: 8,
-  },
-  progressContainer: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginHorizontal: theme.spacing.md,
-  },
-  progressBar: {
-    flex: 1,
-    height: 6,
-    backgroundColor: theme.colors.border,
-    borderRadius: 3,
-    marginRight: 8,
-    overflow: 'hidden',
-  },
-  progressFill: {
-    height: '100%',
-    backgroundColor: theme.colors.primary,
-  },
-  progressText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: theme.colors.textSecondary,
-    width: 35,
-  },
-  statusIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fee2e2',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  pulse: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: theme.colors.error,
-    marginRight: 4,
-  },
-  statusText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: theme.colors.error,
-  },
-  cameraContainer: {
-    height: width * 0.75,
-    padding: theme.spacing.md,
-  },
-  cameraMock: {
-    flex: 1,
-    backgroundColor: '#1e293b',
-    borderRadius: theme.borderRadius.lg,
-    justifyContent: 'center',
-    alignItems: 'center',
-    overflow: 'hidden',
-  },
-  cameraOverlay: {
-    position: 'absolute',
-    bottom: 12,
-    right: 12,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-  },
-  overlayText: {
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: '600',
-  },
-  questionSection: {
-    flex: 1,
-    paddingHorizontal: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  aiLabel: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 16,
-    backgroundColor: '#eef2ff',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 20,
-  },
-  aiLabelText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: theme.colors.primary,
-    marginLeft: 4,
-    letterSpacing: 1,
-  },
-  questionText: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: theme.colors.text,
-    textAlign: 'center',
-    lineHeight: 28,
-  },
-  waveformContainer: {
-    flexDirection: 'row',
-    height: 60,
-    alignItems: 'center',
-    marginTop: 32,
-  },
-  waveformBar: {
-    width: 4,
-    marginHorizontal: 3,
-    borderRadius: 2,
-  },
-  controls: {
-    paddingBottom: 40,
-    paddingHorizontal: 24,
-    alignItems: 'center',
-  },
-  secondaryActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    width: '100%',
-    marginBottom: 20,
-  },
-  actionCircle: {
-    alignItems: 'center',
-  },
-  actionLabel: {
-    fontSize: 10,
-    color: theme.colors.textSecondary,
-    marginTop: 4,
-    fontWeight: '600',
-  },
-  micButton: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
-    backgroundColor: '#e0e7ff',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  micButtonActive: {
-    backgroundColor: '#fee2e2',
-  },
-  micInner: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: theme.colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 4,
-  },
-  micInnerActive: {
-    backgroundColor: theme.colors.error,
-  },
-  micPulse: {
-    position: 'absolute',
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    borderWidth: 2,
-    borderColor: theme.colors.error,
-    opacity: 0.3,
-  },
-  finishBtn: {
-    marginTop: 20,
-  }
+  container: { flex: 1, backgroundColor: theme.colors.background },
+  backBtn: { position: "absolute", top: 56, left: 16, zIndex: 10, padding: 8, backgroundColor: "#fff", borderRadius: theme.borderRadius.full, elevation: 2 },
+  centered: { flex: 1, justifyContent: "center", alignItems: "center", paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xxl },
+  title: { fontSize: 26, fontWeight: "700", color: theme.colors.text, textAlign: "center", marginBottom: theme.spacing.sm },
+  subtitle: { fontSize: 15, color: theme.colors.textSecondary, textAlign: "center", lineHeight: 22, marginBottom: theme.spacing.xl, paddingHorizontal: theme.spacing.sm },
+  primaryBtn: { width: "100%", marginTop: theme.spacing.md },
+  ghostBtn: { width: "100%", marginTop: theme.spacing.xs },
+  avatarCircle: { width: 120, height: 120, borderRadius: 60, backgroundColor: "#eef2ff", justifyContent: "center", alignItems: "center", marginBottom: theme.spacing.xl },
+  infoRow: { flexDirection: "row", alignItems: "center", marginBottom: theme.spacing.sm },
+  infoText: { marginLeft: 8, fontSize: 15, color: theme.colors.textSecondary, fontWeight: "500" },
+  glowCircle: { width: 120, height: 120, borderRadius: 60, backgroundColor: "#eef2ff", justifyContent: "center", alignItems: "center", marginBottom: theme.spacing.xl },
+  activeContainer: { flex: 1, alignItems: "center", paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg },
+  activeHeader: { flexDirection: "row", alignItems: "center", marginBottom: theme.spacing.xl },
+  liveBadge: { flexDirection: "row", alignItems: "center", backgroundColor: "#fee2e2", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, marginRight: theme.spacing.sm },
+  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.error, marginRight: 4 },
+  liveText: { fontSize: 10, fontWeight: "800", color: theme.colors.error, letterSpacing: 1 },
+  activeTitle: { fontSize: 16, fontWeight: "600", color: theme.colors.text },
+  priyaSection: { alignItems: "center", flex: 1, justifyContent: "center" },
+  priyaAvatar: { width: 140, height: 140, borderRadius: 70, backgroundColor: theme.colors.primary, justifyContent: "center", alignItems: "center", marginBottom: theme.spacing.md, elevation: 8 },
+  priyaAvatarSpeaking: { backgroundColor: theme.colors.secondary },
+  priyaName: { fontSize: 22, fontWeight: "700", color: theme.colors.text, marginBottom: 4 },
+  priyaStatus: { fontSize: 14, color: theme.colors.textSecondary, marginBottom: theme.spacing.lg },
+  waveContainer: { flexDirection: "row", alignItems: "center", height: 48 },
+  waveBar: { width: 5, marginHorizontal: 3, borderRadius: 3 },
+  micSection: { flexDirection: "row", alignItems: "center", marginBottom: theme.spacing.lg, backgroundColor: "#fff", paddingHorizontal: theme.spacing.lg, paddingVertical: theme.spacing.md, borderRadius: theme.borderRadius.lg, borderWidth: 1, borderColor: theme.colors.border },
+  micIndicator: { width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.border, justifyContent: "center", alignItems: "center", marginRight: theme.spacing.md },
+  micIndicatorActive: { backgroundColor: theme.colors.secondary },
+  micLabel: { fontSize: 14, color: theme.colors.textSecondary, fontWeight: "500" },
+  endBtn: { width: "100%", borderColor: theme.colors.error, marginBottom: theme.spacing.xl },
+  confirmBox: { width: "100%", backgroundColor: "#fff", borderRadius: theme.borderRadius.lg, padding: theme.spacing.lg, borderWidth: 1, borderColor: theme.colors.error, marginBottom: theme.spacing.xl },
+  confirmText: { fontSize: 16, fontWeight: "600", color: theme.colors.text, textAlign: "center", marginBottom: theme.spacing.md },
+  confirmButtons: { flexDirection: "row", justifyContent: "space-between" },
+  confirmCancel: { flex: 1, paddingVertical: 12, marginRight: 8, borderRadius: theme.borderRadius.md, borderWidth: 1, borderColor: theme.colors.border, alignItems: "center" },
+  confirmCancelText: { fontSize: 15, fontWeight: "600", color: theme.colors.textSecondary },
+  confirmEnd: { flex: 1, paddingVertical: 12, marginLeft: 8, borderRadius: theme.borderRadius.md, backgroundColor: theme.colors.error, alignItems: "center" },
+  confirmEndText: { fontSize: 15, fontWeight: "600", color: "#fff" },
+  successIcon: { marginBottom: theme.spacing.xl },
+  fitmentCard: { width: "100%", backgroundColor: "#fff", borderRadius: theme.borderRadius.lg, padding: theme.spacing.lg, alignItems: "center", borderWidth: 1, borderColor: theme.colors.border, marginBottom: theme.spacing.lg },
+  fitmentLabel: { fontSize: 13, color: theme.colors.textSecondary, marginBottom: 6, marginTop: 4 },
+  fitmentValue: { fontSize: 22, fontWeight: "800", color: theme.colors.secondary, marginBottom: 4 },
+  fitmentScore: { fontSize: 15, color: theme.colors.text, fontWeight: "600" },
+  errorIcon: { marginBottom: theme.spacing.xl },
+  errorMessage: { fontSize: 15, color: theme.colors.error, textAlign: "center", lineHeight: 22, marginBottom: theme.spacing.xl, paddingHorizontal: theme.spacing.sm },
 });

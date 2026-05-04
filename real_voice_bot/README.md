@@ -2,6 +2,27 @@
 
 AI SkillFit is a **real-time voice-based interview agent** that conducts spoken skill assessments for blue-collar, polytechnic, and semi-skilled workers in India. The agent — named **Priya** — connects to a candidate over a LiveKit voice room and walks them through a structured interview entirely through natural speech.
 
+For full setup instructions and prerequisites, see the **[root README](../README.md)**.
+
+---
+
+## Quick Start
+
+```bash
+# Install dependencies
+pip install -r requirements_backend.txt
+pip install -r requirements_agent.txt
+
+# Copy env template and fill in your API keys
+cp .env.example .env
+
+# Terminal 1 — FastAPI backend
+python server.py
+
+# Terminal 2 — Priya voice agent
+python agent.py dev
+```
+
 ---
 
 ## Table of Contents

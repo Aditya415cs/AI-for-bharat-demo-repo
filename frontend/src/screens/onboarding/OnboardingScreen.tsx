@@ -198,7 +198,9 @@ export const OnboardingScreen: React.FC<any> = ({ navigation }) => {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.progressHeader}>
-        <View style={styles.progressTrack}><View style={[styles.progressFill, { width: `${(step / 4) * 100}%` }]} /></View>
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { width: `${(step / 4) * 100}%` }]} />
+        </View>
         <View style={styles.headerInfo}>
           <Text style={styles.stepIndicator}>{t('step')} {step} {t('of')} 4</Text>
           {step > 1 && <TouchableOpacity onPress={() => setStep(step - 1)}><Text style={styles.backBtn}>{t('back')}</Text></TouchableOpacity>}

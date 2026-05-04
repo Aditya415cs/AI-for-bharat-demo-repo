@@ -154,11 +154,11 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
   },
   rolesContainer: {
-    gap: 16,
     marginBottom: 48,
   },
   roleCardWrapper: {
     width: '100%',
+    marginBottom: 16,
   },
   roleCard: {
     flexDirection: 'row',
@@ -201,6 +201,6 @@ const styles = StyleSheet.create({
     borderColor: '#fff',
   },
   continueBtn: {
-    marginTop: 'auto',
+    marginTop: 8,
   },
 });
