@@ -2,9 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Dimensions, Image, ActivityIndicator, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { 
-  Camera, 
-  useCameraDevice, 
+import {
+  Camera,
+  useCameraDevice,
   useCameraPermission,
   useFrameProcessor,
   runAtTargetFps
@@ -43,21 +43,9 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
   const [facesCount, setFacesCount] = useState(0);
   const totalQuestions = 10;
 
-  // These hooks only work on Native with the custom dev client
-  let permission: any = { hasPermission: true };
-  let device: any = null;
-  let faceDetector: any = { detectFaces: () => [] };
-
-  try {
-    // We check if the native hooks are available
-    if (!isWeb) {
-      permission = useCameraPermission();
-      device = useCameraDevice('front');
-    }
-  } catch (e) {
-    // If we are in Expo Go, these will fail. We fallback to mock state.
-    console.log("Native modules not found, running in fallback mode.");
-  }
+  // These hooks only work on Native
+  const permission = isWeb ? { hasPermission: true } : useCameraPermission();
+  const device = isWeb ? null : useCameraDevice('front');
 
   // Configure Face Detector
   const faceDetectorConfig = useRef<FaceDetectorConfig>({
@@ -66,20 +54,12 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
     classificationMode: 'none',
   }).current;
 
-  try {
-    if (!isWeb && device) {
-      faceDetector = useFaceDetector(faceDetectorConfig);
-    }
-  } catch (e) {
-    // Face detector not found
-  }
-
-  const { detectFaces } = faceDetector;
+  const { detectFaces } = isWeb ? { detectFaces: () => [] } : useFaceDetector(faceDetectorConfig);
 
   // Reanimated UI update function
   const onFacesDetected = (faceCount: number, yaw: number) => {
     setFacesCount(faceCount);
-    
+
     if (faceCount === 0) {
       setVerificationStatus('no_face');
     } else if (faceCount > 1) {
@@ -92,8 +72,6 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
       }
     }
   };
-
-  const isNativeAIActive = !isWeb && !!device && !!detectFaces;
 
   const frameProcessor = useFrameProcessor((frame) => {
     'worklet';
@@ -108,23 +86,23 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
   }, [detectFaces]);
 
   useEffect(() => {
-    if (isNativeAIActive && !permission.hasPermission) {
+    if (!isWeb && !permission.hasPermission) {
       permission.requestPermission();
     }
-    
-    // Simulation mode if native AI is not available (Expo Go or Web)
-    if (!isNativeAIActive) {
+
+    // Web simulation
+    if (isWeb) {
       const interval = setInterval(() => {
         const mockFaceCount = Math.random() > 0.1 ? 1 : 0;
         onFacesDetected(mockFaceCount, 0);
       }, 3000);
       return () => clearInterval(interval);
     }
-  }, [permission?.hasPermission, isNativeAIActive]);
+  }, [permission?.hasPermission]);
 
   const config = STATUS_CONFIG[verificationStatus];
 
-  if (isNativeAIActive && !permission.hasPermission) {
+  if (!isWeb && !permission.hasPermission) {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.permissionContainer}>
@@ -160,7 +138,13 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
 
       {/* Camera Preview */}
       <View style={styles.cameraContainer}>
-        {isNativeAIActive ? (
+        {isWeb ? (
+          <View style={styles.webCameraPlaceholder}>
+            <Ionicons name="videocam" size={48} color="#475569" />
+            <Text style={styles.webCameraText}>Camera preview only available on Native Mobile</Text>
+            <Text style={styles.webCameraSubtext}>(Proctoring AI is active in simulation mode)</Text>
+          </View>
+        ) : device ? (
           <Camera
             style={styles.camera}
             device={device}
@@ -169,15 +153,7 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
             pixelFormat="yuv"
           />
         ) : (
-          <View style={styles.webCameraPlaceholder}>
-            <Ionicons name="videocam" size={48} color="#475569" />
-            <Text style={styles.webCameraText}>
-              {isWeb ? "Camera preview only available on Native Mobile" : "Running in Expo Go (Simulation Mode)"}
-            </Text>
-            <Text style={styles.webCameraSubtext}>
-              {isWeb ? "(Proctoring AI is active in simulation mode)" : "Install the APK to enable Real-Time AI"}
-            </Text>
-          </View>
+          <ActivityIndicator size="large" color={theme.colors.primary} />
         )}
 
         {/* Proctoring status badge */}
