@@ -9,6 +9,8 @@
 
 const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
 const BACKEND_API_KEY = process.env.EXPO_PUBLIC_BACKEND_API_KEY;
+const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
 if (!BACKEND_URL) {
   console.warn(
@@ -24,7 +26,23 @@ if (!BACKEND_API_KEY) {
   );
 }
 
+if (!SUPABASE_URL) {
+  console.warn(
+    '[env] EXPO_PUBLIC_SUPABASE_URL is not set. ' +
+      'Add it to your .env file. Falling back to empty string.'
+  );
+}
+
+if (!SUPABASE_ANON_KEY) {
+  console.warn(
+    '[env] EXPO_PUBLIC_SUPABASE_ANON_KEY is not set. ' +
+      'Add it to your .env file. Falling back to empty string.'
+  );
+}
+
 export const ENV = {
   BACKEND_URL: BACKEND_URL ?? '',
   BACKEND_API_KEY: BACKEND_API_KEY ?? '',
+  SUPABASE_URL: SUPABASE_URL ?? '',
+  SUPABASE_ANON_KEY: SUPABASE_ANON_KEY ?? '',
 } as const;

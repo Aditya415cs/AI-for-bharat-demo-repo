@@ -77,7 +77,7 @@ export const RoleSelectionScreen = () => {
               <AppCard
                 style={[
                   styles.roleCard,
-                  selectedRole === role.id && { borderColor: role.color, borderWidth: 2 }
+                  ...(selectedRole === role.id ? [{ borderColor: role.color, borderWidth: 2 }] : [])
                 ]}
                 variant="outlined"
               >

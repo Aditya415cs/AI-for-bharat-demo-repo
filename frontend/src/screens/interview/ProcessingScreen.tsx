@@ -8,7 +8,7 @@ import { AuthContext } from '../../context/AuthContext';
 
 export const ProcessingScreen: React.FC<any> = ({ navigation, route }) => {
   const { jobId } = route.params || {};
-  const { user } = useContext(AuthContext);
+  const { user, profile } = useContext(AuthContext);
 
   useEffect(() => {
     const saveAndNavigate = async () => {
@@ -29,9 +29,14 @@ export const ProcessingScreen: React.FC<any> = ({ navigation, route }) => {
           await supabase.from('interviews').insert({
             user_id: user.id,
             job_id: jobId,
-            score: mockResult.score,
+            candidate_name: profile?.full_name || user.email || 'Candidate',
+            phone_number: profile?.phone || null,
+            trade: profile?.trade || 'Unknown',
+            average_score: mockResult.score,
+            fitment: mockResult.classification,
             classification: mockResult.classification,
             confidence_score: mockResult.confidence_score,
+            status: 'completed',
             feedback: mockResult.feedback
           });
         } catch (err) {
