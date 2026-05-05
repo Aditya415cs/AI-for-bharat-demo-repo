@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Dimensions, Image, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Dimensions, Image, ActivityIndicator, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { 
@@ -15,6 +15,7 @@ import { theme } from '../../theme';
 import { AppButton } from '../../components/AppButton';
 
 const { width } = Dimensions.get('window');
+const isWeb = Platform.OS === 'web';
 
 type VerificationStatus = 'scanning' | 'verified' | 'no_face' | 'multiple_faces' | 'not_looking';
 
@@ -42,8 +43,9 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
   const [facesCount, setFacesCount] = useState(0);
   const totalQuestions = 10;
 
-  const { hasPermission, requestPermission } = useCameraPermission();
-  const device = useCameraDevice('front');
+  // These hooks only work on Native
+  const permission = isWeb ? { hasPermission: true } : useCameraPermission();
+  const device = isWeb ? null : useCameraDevice('front');
 
   // Configure Face Detector
   const faceDetectorConfig = useRef<FaceDetectorConfig>({
@@ -52,7 +54,7 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
     classificationMode: 'none',
   }).current;
 
-  const { detectFaces } = useFaceDetector(faceDetectorConfig);
+  const { detectFaces } = isWeb ? { detectFaces: () => [] } : useFaceDetector(faceDetectorConfig);
 
   // Reanimated UI update function
   const onFacesDetected = (faceCount: number, yaw: number) => {
@@ -63,7 +65,6 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
     } else if (faceCount > 1) {
       setVerificationStatus('multiple_faces');
     } else {
-      // Check if looking at camera (yaw angle threshold)
       if (Math.abs(yaw) > 20) {
         setVerificationStatus('not_looking');
       } else {
@@ -74,26 +75,34 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
 
   const frameProcessor = useFrameProcessor((frame) => {
     'worklet';
+    if (isWeb) return;
     runAtTargetFps(5, () => {
       'worklet';
       const detectedFaces = detectFaces(frame);
       const faceCount = detectedFaces.length;
       const firstFaceYaw = faceCount > 0 ? (detectedFaces[0].yawAngle ?? 0) : 0;
-      
-      // Use Reanimated's runOnJS instead of Worklets.createRunOnJS
       runOnJS(onFacesDetected)(faceCount, firstFaceYaw);
     });
   }, [detectFaces]);
 
   useEffect(() => {
-    if (!hasPermission) {
-      requestPermission();
+    if (!isWeb && !permission.hasPermission) {
+      permission.requestPermission();
     }
-  }, [hasPermission]);
+    
+    // Web simulation
+    if (isWeb) {
+      const interval = setInterval(() => {
+        const mockFaceCount = Math.random() > 0.1 ? 1 : 0;
+        onFacesDetected(mockFaceCount, 0);
+      }, 3000);
+      return () => clearInterval(interval);
+    }
+  }, [permission?.hasPermission]);
 
   const config = STATUS_CONFIG[verificationStatus];
 
-  if (!hasPermission) {
+  if (!isWeb && !permission.hasPermission) {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.permissionContainer}>
@@ -102,17 +111,9 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
           <Text style={styles.permissionText}>
             AI Interview Proctoring requires camera access for real-time monitoring.
           </Text>
-          <AppButton title="Grant Permission" onPress={requestPermission} />
+          <AppButton title="Grant Permission" onPress={permission.requestPermission} />
         </View>
       </SafeAreaView>
-    );
-  }
-
-  if (!device) {
-    return (
-      <View style={styles.container}>
-        <ActivityIndicator size="large" color={theme.colors.primary} />
-      </View>
     );
   }
 
@@ -135,15 +136,25 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
         </View>
       </View>
 
-      {/* Real-time Camera Preview */}
+      {/* Camera Preview */}
       <View style={styles.cameraContainer}>
-        <Camera
-          style={styles.camera}
-          device={device}
-          isActive={true}
-          frameProcessor={frameProcessor}
-          pixelFormat="yuv"
-        />
+        {isWeb ? (
+          <View style={styles.webCameraPlaceholder}>
+            <Ionicons name="videocam" size={48} color="#475569" />
+            <Text style={styles.webCameraText}>Camera preview only available on Native Mobile</Text>
+            <Text style={styles.webCameraSubtext}>(Proctoring AI is active in simulation mode)</Text>
+          </View>
+        ) : device ? (
+          <Camera
+            style={styles.camera}
+            device={device}
+            isActive={true}
+            frameProcessor={frameProcessor}
+            pixelFormat="yuv"
+          />
+        ) : (
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+        )}
 
         {/* Proctoring status badge */}
         <View style={[styles.faceBadge, { backgroundColor: config.bgColor }]}>
@@ -340,6 +351,25 @@ const styles = StyleSheet.create({
   camera: {
     flex: 1,
     backgroundColor: '#000',
+  },
+  webCameraPlaceholder: {
+    flex: 1,
+    backgroundColor: '#f1f5f9',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  webCameraText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#475569',
+    textAlign: 'center',
+    marginTop: 12,
+  },
+  webCameraSubtext: {
+    fontSize: 12,
+    color: '#64748b',
+    marginTop: 4,
   },
   faceBadge: {
     position: 'absolute',
