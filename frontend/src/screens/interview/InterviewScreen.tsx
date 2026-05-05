@@ -10,7 +10,7 @@ import {
   runAtTargetFps
 } from 'react-native-vision-camera';
 import { useFaceDetector, FaceDetectorConfig } from 'react-native-vision-camera-face-detector';
-import { Worklets } from 'react-native-worklets-core';
+import { runOnJS } from 'react-native-reanimated';
 import { theme } from '../../theme';
 import { AppButton } from '../../components/AppButton';
 
@@ -54,8 +54,8 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
 
   const { detectFaces } = useFaceDetector(faceDetectorConfig);
 
-  // Worklet to update UI state from the Frame Processor
-  const updateUI = Worklets.createRunOnJS((faceCount: number, yaw: number) => {
+  // Reanimated UI update function
+  const onFacesDetected = (faceCount: number, yaw: number) => {
     setFacesCount(faceCount);
     
     if (faceCount === 0) {
@@ -70,7 +70,7 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
         setVerificationStatus('verified');
       }
     }
-  });
+  };
 
   const frameProcessor = useFrameProcessor((frame) => {
     'worklet';
@@ -80,7 +80,8 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
       const faceCount = detectedFaces.length;
       const firstFaceYaw = faceCount > 0 ? (detectedFaces[0].yawAngle ?? 0) : 0;
       
-      updateUI(faceCount, firstFaceYaw);
+      // Use Reanimated's runOnJS instead of Worklets.createRunOnJS
+      runOnJS(onFacesDetected)(faceCount, firstFaceYaw);
     });
   }, [detectFaces]);
 
