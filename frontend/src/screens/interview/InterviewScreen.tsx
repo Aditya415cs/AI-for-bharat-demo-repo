@@ -1,75 +1,123 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Dimensions, Image, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { 
+  Camera, 
+  useCameraDevice, 
+  useCameraPermission,
+  useFrameProcessor,
+  runAtTargetFps
+} from 'react-native-vision-camera';
+import { useFaceDetector, FaceDetectorConfig } from 'react-native-vision-camera-face-detector';
+import { Worklets } from 'react-native-worklets-core';
 import { theme } from '../../theme';
 import { AppButton } from '../../components/AppButton';
 
 const { width } = Dimensions.get('window');
 
-type FaceState = 'scanning' | 'verified' | 'not_detected' | 'mismatch';
+type VerificationStatus = 'scanning' | 'verified' | 'no_face' | 'multiple_faces' | 'not_looking';
+
+interface FaceConfig {
+  color: string;
+  bgColor: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+}
+
+const STATUS_CONFIG: Record<VerificationStatus, FaceConfig> = {
+  scanning: { color: '#3b82f6', bgColor: 'rgba(59,130,246,0.85)', icon: 'scan', label: 'Scanning face...' },
+  verified: { color: '#22c55e', bgColor: 'rgba(34,197,94,0.85)', icon: 'checkmark-circle', label: 'Face Verified' },
+  no_face: { color: '#f59e0b', bgColor: 'rgba(245,158,11,0.85)', icon: 'warning', label: 'No Face Detected' },
+  multiple_faces: { color: '#ef4444', bgColor: 'rgba(239,68,68,0.85)', icon: 'people', label: 'Multiple Faces!' },
+  not_looking: { color: '#f59e0b', bgColor: 'rgba(245,158,11,0.85)', icon: 'eye-off', label: 'Look at Camera' },
+};
 
 export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
-  const { jobId } = route.params || {};
+  const { jobId, referencePhoto } = route.params || {};
   const [isRecording, setIsRecording] = useState(false);
   const [currentQuestion, setCurrentQuestion] = useState(2);
-  const [facing, setFacing] = useState<'front' | 'back'>('front');
-  const [faceState, setFaceState] = useState<FaceState>('scanning');
+  const [verificationStatus, setVerificationStatus] = useState<VerificationStatus>('scanning');
+  const [showRefPhoto, setShowRefPhoto] = useState(false);
+  const [facesCount, setFacesCount] = useState(0);
   const totalQuestions = 10;
 
-  const [permission, requestPermission] = useCameraPermissions();
+  const { hasPermission, requestPermission } = useCameraPermission();
+  const device = useCameraDevice('front');
 
-  // Simulate face verification cycling for demo
-  useEffect(() => {
-    const states: FaceState[] = ['scanning', 'verified', 'scanning', 'not_detected', 'scanning', 'verified'];
-    let i = 0;
-    const interval = setInterval(() => {
-      i = (i + 1) % states.length;
-      setFaceState(states[i]);
-    }, 3000);
-    return () => clearInterval(interval);
-  }, []);
+  // Configure Face Detector
+  const faceDetectorConfig = useRef<FaceDetectorConfig>({
+    performanceMode: 'fast',
+    landmarkMode: 'none',
+    classificationMode: 'none',
+  }).current;
 
-  const getFaceConfig = () => {
-    switch (faceState) {
-      case 'verified':
-        return { color: '#22c55e', icon: 'checkmark-circle' as const, label: 'Face Verified' };
-      case 'not_detected':
-        return { color: '#f59e0b', icon: 'warning' as const, label: 'Face Not Detected' };
-      case 'mismatch':
-        return { color: '#ef4444', icon: 'close-circle' as const, label: 'Identity Mismatch' };
-      default:
-        return { color: '#3b82f6', icon: 'scan' as const, label: 'Scanning...' };
+  const { detectFaces } = useFaceDetector(faceDetectorConfig);
+
+  // Worklet to update UI state from the Frame Processor
+  const updateUI = Worklets.createRunOnJS((faceCount: number, yaw: number) => {
+    setFacesCount(faceCount);
+    
+    if (faceCount === 0) {
+      setVerificationStatus('no_face');
+    } else if (faceCount > 1) {
+      setVerificationStatus('multiple_faces');
+    } else {
+      // Check if looking at camera (yaw angle threshold)
+      if (Math.abs(yaw) > 20) {
+        setVerificationStatus('not_looking');
+      } else {
+        setVerificationStatus('verified');
+      }
     }
-  };
+  });
 
-  const faceConfig = getFaceConfig();
+  const frameProcessor = useFrameProcessor((frame) => {
+    'worklet';
+    runAtTargetFps(5, () => {
+      'worklet';
+      const detectedFaces = detectFaces(frame);
+      const faceCount = detectedFaces.length;
+      const firstFaceYaw = faceCount > 0 ? (detectedFaces[0].yawAngle ?? 0) : 0;
+      
+      updateUI(faceCount, firstFaceYaw);
+    });
+  }, [detectFaces]);
 
-  // Still loading permissions
-  if (!permission) {
-    return <View style={styles.container} />;
-  }
+  useEffect(() => {
+    if (!hasPermission) {
+      requestPermission();
+    }
+  }, [hasPermission]);
 
-  // Permission denied
-  if (!permission.granted) {
+  const config = STATUS_CONFIG[verificationStatus];
+
+  if (!hasPermission) {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.permissionContainer}>
           <Ionicons name="camera-outline" size={64} color={theme.colors.primary} />
           <Text style={styles.permissionTitle}>Camera Access Required</Text>
           <Text style={styles.permissionText}>
-            This interview requires camera access so the interviewer can see you during the session.
+            AI Interview Proctoring requires camera access for real-time monitoring.
           </Text>
-          <AppButton title="Grant Camera Access" onPress={requestPermission} />
+          <AppButton title="Grant Permission" onPress={requestPermission} />
         </View>
       </SafeAreaView>
     );
   }
 
+  if (!device) {
+    return (
+      <View style={styles.container}>
+        <ActivityIndicator size="large" color={theme.colors.primary} />
+      </View>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header with Progress */}
+      {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.closeBtn}>
           <Ionicons name="close" size={24} color={theme.colors.text} />
@@ -86,35 +134,67 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
         </View>
       </View>
 
-      {/* Full-width Camera with overlays */}
+      {/* Real-time Camera Preview */}
       <View style={styles.cameraContainer}>
-        <CameraView style={styles.camera} facing={facing}>
+        <Camera
+          style={styles.camera}
+          device={device}
+          isActive={true}
+          frameProcessor={frameProcessor}
+          pixelFormat="yuv"
+        />
 
-          {/* Face verification bounding box */}
-          <View style={[styles.faceBox, { borderColor: faceConfig.color }]} />
+        {/* Proctoring status badge */}
+        <View style={[styles.faceBadge, { backgroundColor: config.bgColor }]}>
+          <Ionicons name={config.icon} size={14} color="#fff" />
+          <Text style={styles.faceBadgeText}>{config.label}</Text>
+        </View>
 
-          {/* Face verification badge — top left */}
-          <View style={[styles.faceBadge, { backgroundColor: faceConfig.color }]}>
-            <Ionicons name={faceConfig.icon} size={13} color="#fff" />
-            <Text style={styles.faceBadgeText}>{faceConfig.label}</Text>
-          </View>
+        {/* Identity Box Overlay */}
+        <View style={[styles.faceBox, { borderColor: config.color }]}>
+          <View style={[styles.cornerTL, { borderColor: config.color }]} />
+          <View style={[styles.cornerTR, { borderColor: config.color }]} />
+          <View style={[styles.cornerBL, { borderColor: config.color }]} />
+          <View style={[styles.cornerBR, { borderColor: config.color }]} />
+        </View>
 
-          {/* Flip button — top right */}
+        {/* Reference Photo Comparison */}
+        {referencePhoto && (
           <TouchableOpacity
-            style={styles.flipBtn}
-            onPress={() => setFacing(f => (f === 'front' ? 'back' : 'front'))}
+            style={styles.refPhotoBtn}
+            onPress={() => setShowRefPhoto(!showRefPhoto)}
           >
-            <Ionicons name="camera-reverse-outline" size={20} color="#fff" />
+            <Image source={{ uri: referencePhoto }} style={styles.refPhotoThumb} />
+            <View style={styles.refPhotoBadge}>
+              <Text style={styles.refPhotoLabel}>REF</Text>
+            </View>
           </TouchableOpacity>
+        )}
 
-          {/* Live badge — bottom right */}
+        {/* Expanded reference photo */}
+        {showRefPhoto && referencePhoto && (
+          <TouchableOpacity
+            style={styles.refPhotoOverlay}
+            activeOpacity={1}
+            onPress={() => setShowRefPhoto(false)}
+          >
+            <Image source={{ uri: referencePhoto }} style={styles.refPhotoLarge} />
+            <Text style={styles.refPhotoCaption}>Verified Identity Reference</Text>
+          </TouchableOpacity>
+        )}
+
+        <View style={styles.cameraBottomBar}>
           <View style={styles.liveBadge}>
-            <Text style={styles.liveBadgeText}>● LIVE</Text>
+            <Text style={styles.liveBadgeText}>● MONITORING</Text>
           </View>
-        </CameraView>
+          <View style={styles.scanCountBadge}>
+            <Ionicons name="people" size={12} color="#fff" />
+            <Text style={styles.scanCountText}>{facesCount} detected</Text>
+          </View>
+        </View>
       </View>
 
-      {/* AI Question Section */}
+      {/* AI Question */}
       <View style={styles.questionSection}>
         <View style={styles.aiLabel}>
           <Ionicons name="sparkles" size={16} color={theme.colors.primary} />
@@ -124,7 +204,6 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
           "Tell me about a time when you had to deal with a difficult colleague. How did you resolve the situation?"
         </Text>
 
-        {/* Waveform */}
         <View style={styles.waveformContainer}>
           {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
             <View
@@ -141,7 +220,7 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
         </View>
       </View>
 
-      {/* Bottom Controls */}
+      {/* Controls */}
       <View style={styles.controls}>
         <View style={styles.secondaryActions}>
           <TouchableOpacity style={styles.actionCircle}>
@@ -182,8 +261,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#fff',
   },
-
-  // Permission
   permissionContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -203,13 +280,11 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 22,
   },
-
-  // Header
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: theme.spacing.md,
-    height: 60,
+    height: 56,
     justifyContent: 'space-between',
   },
   closeBtn: { padding: 8 },
@@ -257,29 +332,14 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: theme.colors.error,
   },
-
-  // Camera — full width, no horizontal padding
   cameraContainer: {
     width: width,
     height: width * 0.78,
   },
   camera: {
     flex: 1,
+    backgroundColor: '#000',
   },
-
-  // Face verification bounding box
-  faceBox: {
-    position: 'absolute',
-    top: '15%',
-    left: '25%',
-    width: '50%',
-    height: '65%',
-    borderWidth: 2,
-    borderRadius: 8,
-    borderStyle: 'dashed',
-  },
-
-  // Face badge top-left
   faceBadge: {
     position: 'absolute',
     top: 12,
@@ -287,31 +347,124 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingVertical: 6,
     borderRadius: 20,
-    gap: 5,
+    gap: 6,
+    zIndex: 10,
   },
   faceBadgeText: {
     color: '#fff',
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '700',
   },
-
-  // Flip button top-right
-  flipBtn: {
+  faceBox: {
     position: 'absolute',
-    top: 12,
-    right: 12,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    borderRadius: 20,
-    padding: 8,
+    top: '18%',
+    left: '27%',
+    width: '46%',
+    height: '60%',
   },
-
-  // Live badge bottom-right
-  liveBadge: {
+  cornerTL: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: 20,
+    height: 20,
+    borderTopWidth: 3,
+    borderLeftWidth: 3,
+    borderRadius: 4,
+  },
+  cornerTR: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    width: 20,
+    height: 20,
+    borderTopWidth: 3,
+    borderRightWidth: 3,
+    borderRadius: 4,
+  },
+  cornerBL: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    width: 20,
+    height: 20,
+    borderBottomWidth: 3,
+    borderLeftWidth: 3,
+    borderRadius: 4,
+  },
+  cornerBR: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 20,
+    height: 20,
+    borderBottomWidth: 3,
+    borderRightWidth: 3,
+    borderRadius: 4,
+  },
+  refPhotoBtn: {
+    position: 'absolute',
+    bottom: 48,
+    left: 12,
+    zIndex: 10,
+  },
+  refPhotoThumb: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  refPhotoBadge: {
+    position: 'absolute',
+    bottom: -4,
+    right: -4,
+    backgroundColor: '#8b5cf6',
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 6,
+  },
+  refPhotoLabel: {
+    color: '#fff',
+    fontSize: 8,
+    fontWeight: '800',
+  },
+  refPhotoOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 20,
+  },
+  refPhotoLarge: {
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+    borderWidth: 3,
+    borderColor: '#fff',
+  },
+  refPhotoCaption: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+    marginTop: 12,
+  },
+  cameraBottomBar: {
     position: 'absolute',
     bottom: 12,
+    left: 12,
     right: 12,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  liveBadge: {
     backgroundColor: 'rgba(0,0,0,0.5)',
     paddingHorizontal: 8,
     paddingVertical: 4,
@@ -322,8 +475,20 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
   },
-
-  // Question
+  scanCountBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+    gap: 4,
+  },
+  scanCountText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '700',
+  },
   questionSection: {
     flex: 1,
     paddingHorizontal: 24,
@@ -333,7 +498,7 @@ const styles = StyleSheet.create({
   aiLabel: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 12,
     backgroundColor: '#eef2ff',
     paddingHorizontal: 10,
     paddingVertical: 4,
@@ -347,27 +512,25 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
   questionText: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '600',
     color: theme.colors.text,
     textAlign: 'center',
-    lineHeight: 26,
+    lineHeight: 24,
   },
   waveformContainer: {
     flexDirection: 'row',
-    height: 50,
+    height: 40,
     alignItems: 'center',
-    marginTop: 20,
+    marginTop: 16,
   },
   waveformBar: {
     width: 4,
     marginHorizontal: 3,
     borderRadius: 2,
   },
-
-  // Controls
   controls: {
-    paddingBottom: 32,
+    paddingBottom: 28,
     paddingHorizontal: 24,
     alignItems: 'center',
   },
@@ -375,7 +538,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-around',
     width: '100%',
-    marginBottom: 16,
+    marginBottom: 14,
   },
   actionCircle: { alignItems: 'center' },
   actionLabel: {
@@ -385,18 +548,18 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   micButton: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
+    width: 80,
+    height: 80,
+    borderRadius: 40,
     backgroundColor: '#e0e7ff',
     justifyContent: 'center',
     alignItems: 'center',
   },
   micButtonActive: { backgroundColor: '#fee2e2' },
   micInner: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    width: 58,
+    height: 58,
+    borderRadius: 29,
     backgroundColor: theme.colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
@@ -405,12 +568,12 @@ const styles = StyleSheet.create({
   micInnerActive: { backgroundColor: theme.colors.error },
   micPulse: {
     position: 'absolute',
-    width: 100,
-    height: 100,
-    borderRadius: 50,
+    width: 96,
+    height: 96,
+    borderRadius: 48,
     borderWidth: 2,
     borderColor: theme.colors.error,
     opacity: 0.3,
   },
-  finishBtn: { marginTop: 16 },
+  finishBtn: { marginTop: 12 },
 });

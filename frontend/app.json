@@ -33,6 +33,18 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
-    }
+    },
+    "plugins": [
+      [
+        "react-native-vision-camera",
+        {
+          "cameraPermissionText": "AI Interview Proctoring requires camera access to monitor for cheating.",
+          "enableMicrophonePermission": true,
+          "microphonePermissionText": "AI Interview Proctoring requires microphone access to record your responses."
+        }
+      ],
+      "react-native-reanimated/plugin"
+    ]
   }
 }
+
