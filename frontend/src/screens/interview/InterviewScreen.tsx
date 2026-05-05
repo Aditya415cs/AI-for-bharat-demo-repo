@@ -2,16 +2,70 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { theme } from '../../theme';
 import { AppButton } from '../../components/AppButton';
 
 const { width } = Dimensions.get('window');
 
+type FaceState = 'scanning' | 'verified' | 'not_detected' | 'mismatch';
+
 export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
   const { jobId } = route.params || {};
   const [isRecording, setIsRecording] = useState(false);
   const [currentQuestion, setCurrentQuestion] = useState(2);
+  const [facing, setFacing] = useState<'front' | 'back'>('front');
+  const [faceState, setFaceState] = useState<FaceState>('scanning');
   const totalQuestions = 10;
+
+  const [permission, requestPermission] = useCameraPermissions();
+
+  // Simulate face verification cycling for demo
+  useEffect(() => {
+    const states: FaceState[] = ['scanning', 'verified', 'scanning', 'not_detected', 'scanning', 'verified'];
+    let i = 0;
+    const interval = setInterval(() => {
+      i = (i + 1) % states.length;
+      setFaceState(states[i]);
+    }, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const getFaceConfig = () => {
+    switch (faceState) {
+      case 'verified':
+        return { color: '#22c55e', icon: 'checkmark-circle' as const, label: 'Face Verified' };
+      case 'not_detected':
+        return { color: '#f59e0b', icon: 'warning' as const, label: 'Face Not Detected' };
+      case 'mismatch':
+        return { color: '#ef4444', icon: 'close-circle' as const, label: 'Identity Mismatch' };
+      default:
+        return { color: '#3b82f6', icon: 'scan' as const, label: 'Scanning...' };
+    }
+  };
+
+  const faceConfig = getFaceConfig();
+
+  // Still loading permissions
+  if (!permission) {
+    return <View style={styles.container} />;
+  }
+
+  // Permission denied
+  if (!permission.granted) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.permissionContainer}>
+          <Ionicons name="camera-outline" size={64} color={theme.colors.primary} />
+          <Text style={styles.permissionTitle}>Camera Access Required</Text>
+          <Text style={styles.permissionText}>
+            This interview requires camera access so the interviewer can see you during the session.
+          </Text>
+          <AppButton title="Grant Camera Access" onPress={requestPermission} />
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -32,14 +86,32 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
         </View>
       </View>
 
-      {/* Camera Preview Area (Mock) */}
+      {/* Full-width Camera with overlays */}
       <View style={styles.cameraContainer}>
-        <View style={styles.cameraMock}>
-          <Ionicons name="person" size={120} color="rgba(255,255,255,0.3)" />
-          <View style={styles.cameraOverlay}>
-            <Text style={styles.overlayText}>Camera Active</Text>
+        <CameraView style={styles.camera} facing={facing}>
+
+          {/* Face verification bounding box */}
+          <View style={[styles.faceBox, { borderColor: faceConfig.color }]} />
+
+          {/* Face verification badge — top left */}
+          <View style={[styles.faceBadge, { backgroundColor: faceConfig.color }]}>
+            <Ionicons name={faceConfig.icon} size={13} color="#fff" />
+            <Text style={styles.faceBadgeText}>{faceConfig.label}</Text>
           </View>
-        </View>
+
+          {/* Flip button — top right */}
+          <TouchableOpacity
+            style={styles.flipBtn}
+            onPress={() => setFacing(f => (f === 'front' ? 'back' : 'front'))}
+          >
+            <Ionicons name="camera-reverse-outline" size={20} color="#fff" />
+          </TouchableOpacity>
+
+          {/* Live badge — bottom right */}
+          <View style={styles.liveBadge}>
+            <Text style={styles.liveBadgeText}>● LIVE</Text>
+          </View>
+        </CameraView>
       </View>
 
       {/* AI Question Section */}
@@ -51,19 +123,19 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
         <Text style={styles.questionText}>
           "Tell me about a time when you had to deal with a difficult colleague. How did you resolve the situation?"
         </Text>
-        
-        {/* Waveform Mock */}
+
+        {/* Waveform */}
         <View style={styles.waveformContainer}>
           {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
-            <View 
-              key={i} 
+            <View
+              key={i}
               style={[
-                styles.waveformBar, 
-                { 
+                styles.waveformBar,
+                {
                   height: isRecording ? 10 + Math.random() * 30 : 4,
-                  backgroundColor: isRecording ? theme.colors.primary : theme.colors.border
-                }
-              ]} 
+                  backgroundColor: isRecording ? theme.colors.primary : theme.colors.border,
+                },
+              ]}
             />
           ))}
         </View>
@@ -82,20 +154,20 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
           </TouchableOpacity>
         </View>
 
-        <TouchableOpacity 
+        <TouchableOpacity
           style={[styles.micButton, isRecording && styles.micButtonActive]}
           onPress={() => setIsRecording(!isRecording)}
           activeOpacity={0.7}
         >
           <View style={[styles.micInner, isRecording && styles.micInnerActive]}>
-            <Ionicons name={isRecording ? "stop" : "mic"} size={32} color="#fff" />
+            <Ionicons name={isRecording ? 'stop' : 'mic'} size={32} color="#fff" />
           </View>
           {isRecording && <View style={styles.micPulse} />}
         </TouchableOpacity>
 
-        <AppButton 
-          title="Finish" 
-          variant="ghost" 
+        <AppButton
+          title="Finish"
+          variant="ghost"
           onPress={() => navigation.navigate('Processing', { jobId })}
           style={styles.finishBtn}
           textStyle={{ color: theme.colors.error }}
@@ -110,6 +182,29 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#fff',
   },
+
+  // Permission
+  permissionContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 40,
+    gap: 16,
+  },
+  permissionTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: theme.colors.text,
+    textAlign: 'center',
+  },
+  permissionText: {
+    fontSize: 15,
+    color: theme.colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 22,
+  },
+
+  // Header
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -117,9 +212,7 @@ const styles = StyleSheet.create({
     height: 60,
     justifyContent: 'space-between',
   },
-  closeBtn: {
-    padding: 8,
-  },
+  closeBtn: { padding: 8 },
   progressContainer: {
     flex: 1,
     flexDirection: 'row',
@@ -164,19 +257,58 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: theme.colors.error,
   },
+
+  // Camera — full width, no horizontal padding
   cameraContainer: {
-    height: width * 0.75,
-    padding: theme.spacing.md,
+    width: width,
+    height: width * 0.78,
   },
-  cameraMock: {
+  camera: {
     flex: 1,
-    backgroundColor: '#1e293b',
-    borderRadius: theme.borderRadius.lg,
-    justifyContent: 'center',
-    alignItems: 'center',
-    overflow: 'hidden',
   },
-  cameraOverlay: {
+
+  // Face verification bounding box
+  faceBox: {
+    position: 'absolute',
+    top: '15%',
+    left: '25%',
+    width: '50%',
+    height: '65%',
+    borderWidth: 2,
+    borderRadius: 8,
+    borderStyle: 'dashed',
+  },
+
+  // Face badge top-left
+  faceBadge: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
+    gap: 5,
+  },
+  faceBadgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+
+  // Flip button top-right
+  flipBtn: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    borderRadius: 20,
+    padding: 8,
+  },
+
+  // Live badge bottom-right
+  liveBadge: {
     position: 'absolute',
     bottom: 12,
     right: 12,
@@ -185,11 +317,13 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 4,
   },
-  overlayText: {
+  liveBadgeText: {
     color: '#fff',
     fontSize: 10,
-    fontWeight: '600',
+    fontWeight: '700',
   },
+
+  // Question
   questionSection: {
     flex: 1,
     paddingHorizontal: 24,
@@ -213,25 +347,27 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
   questionText: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '600',
     color: theme.colors.text,
     textAlign: 'center',
-    lineHeight: 28,
+    lineHeight: 26,
   },
   waveformContainer: {
     flexDirection: 'row',
-    height: 60,
+    height: 50,
     alignItems: 'center',
-    marginTop: 32,
+    marginTop: 20,
   },
   waveformBar: {
     width: 4,
     marginHorizontal: 3,
     borderRadius: 2,
   },
+
+  // Controls
   controls: {
-    paddingBottom: 40,
+    paddingBottom: 32,
     paddingHorizontal: 24,
     alignItems: 'center',
   },
@@ -239,11 +375,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-around',
     width: '100%',
-    marginBottom: 20,
+    marginBottom: 16,
   },
-  actionCircle: {
-    alignItems: 'center',
-  },
+  actionCircle: { alignItems: 'center' },
   actionLabel: {
     fontSize: 10,
     color: theme.colors.textSecondary,
@@ -258,9 +392,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  micButtonActive: {
-    backgroundColor: '#fee2e2',
-  },
+  micButtonActive: { backgroundColor: '#fee2e2' },
   micInner: {
     width: 64,
     height: 64,
@@ -270,9 +402,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     elevation: 4,
   },
-  micInnerActive: {
-    backgroundColor: theme.colors.error,
-  },
+  micInnerActive: { backgroundColor: theme.colors.error },
   micPulse: {
     position: 'absolute',
     width: 100,
@@ -282,7 +412,5 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.error,
     opacity: 0.3,
   },
-  finishBtn: {
-    marginTop: 20,
-  }
+  finishBtn: { marginTop: 16 },
 });
