@@ -45,7 +45,8 @@
           "enableMicrophonePermission": true,
           "microphonePermissionText": "AI Interview Proctoring requires microphone access to record your responses."
         }
-      ]
+      ],
+      "expo-font"
     ],
     "extra": {
       "eas": {
