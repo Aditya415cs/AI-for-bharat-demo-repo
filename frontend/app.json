@@ -46,7 +46,15 @@
           "microphonePermissionText": "AI Interview Proctoring requires microphone access to record your responses."
         }
       ],
-      "expo-font"
+      "expo-font",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 26
+          }
+        }
+      ]
     ],
     "extra": {
       "eas": {
