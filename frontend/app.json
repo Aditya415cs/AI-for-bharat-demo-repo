@@ -18,21 +18,49 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSCameraUsageDescription": "This app uses the camera for real-time video tracking.",
-        "NSMicrophoneUsageDescription": "This app uses the microphone for real-time voice tracking."
+        "NSCameraUsageDescription": "AI Interview Proctoring requires camera access to monitor for cheating.",
+        "NSMicrophoneUsageDescription": "AI Interview Proctoring requires microphone access to record your responses."
       }
     },
     "android": {
       "permissions": [
         "CAMERA",
-        "RECORD_AUDIO"
+        "RECORD_AUDIO",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
       ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.vismay.aibharat"
+    },
+    "plugins": [
+      [
+        "react-native-vision-camera",
+        {
+          "cameraPermissionText": "AI Interview Proctoring requires camera access to monitor for cheating.",
+          "enableMicrophonePermission": true,
+          "microphonePermissionText": "AI Interview Proctoring requires microphone access to record your responses."
+        }
+      ],
+      "expo-font",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 26,
+            "kotlinVersion": "2.0.21"
+          }
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "f54e9c9a-58a4-48bc-b101-7b170aa62882"
+      }
     }
   }
 }
