@@ -11,11 +11,11 @@ export const JobBrowsingScreen = ({ navigation }: any) => {
   const [jobs, setJobs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
-  const { t, user } = useContext(AuthContext);
+  const { t, user, profile } = useContext(AuthContext);
 
   useEffect(() => {
     fetchJobs();
-  }, []);
+  }, [profile?.trade]);
 
   const fetchJobs = async () => {
     setLoading(true);
@@ -34,6 +34,13 @@ export const JobBrowsingScreen = ({ navigation }: any) => {
       
       if (blockedCompanyIds.length > 0) {
         query = query.not('company_id', 'in', `(${blockedCompanyIds.join(',')})`);
+      }
+
+      // Filter by candidate's trade — only show jobs matching their trade.
+      // If trade is 'Other' or not set, show all jobs.
+      const candidateTrade = profile?.trade;
+      if (candidateTrade && candidateTrade.toLowerCase() !== 'other') {
+        query = query.ilike('trade', candidateTrade);
       }
 
       const { data, error } = await query.order('created_at', { ascending: false });

@@ -1,112 +1,356 @@
-import React, { useState, useEffect, useContext } from 'react';
-import { View, Text, StyleSheet, FlatList, ActivityIndicator, TouchableOpacity } from 'react-native';
+import React, { useState, useEffect, useContext, useCallback } from 'react';
+import {
+  View, Text, StyleSheet, FlatList, ActivityIndicator,
+  TouchableOpacity, ScrollView,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../../theme';
 import { supabase } from '../../services/supabase/config';
 import { AuthContext } from '../../context/AuthContext';
-import { AppCard } from '../../components/AppCard';
 
-export const HistoryScreen = ({ navigation }: any) => {
-  const [applications, setApplications] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const { user } = useContext(AuthContext);
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
-  useEffect(() => {
-    fetchHistory();
-  }, []);
+const FITMENT_COLOR: Record<string, string> = {
+  'Job-Ready': '#10b981',
+  'Requires Training': '#f59e0b',
+  'Low Confidence': '#ef4444',
+  'Requires Significant Upskilling': '#8b5cf6',
+  'Requires Manual Verification': '#0ea5e9',
+};
 
-  const fetchHistory = async () => {
-    if (!user) return;
-    setLoading(true);
-    try {
-      // 1. Fetch applications
-      const { data: apps, error: appError } = await supabase
-        .from('applications')
-        .select(`
-          id,
-          status,
-          job_id,
-          created_at,
-          jobs (
-            id,
-            title,
-            location,
-            companies (company_name)
-          )
-        `)
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
+const ADMIN_STATUS_COLOR: Record<string, string> = {
+  shortlisted: '#16a34a',
+  rejected: '#dc2626',
+  marked_for_training: '#8b5cf6',
+};
 
-      if (appError) throw appError;
+function scoreColor(s: number) {
+  if (s >= 7.5) return '#10b981';
+  if (s >= 5) return '#f59e0b';
+  return '#ef4444';
+}
 
-      // 2. Fetch interviews for this user
-      const { data: interviews, error: intError } = await supabase
-        .from('interviews')
-        .select('average_score, classification, job_id')
-        .eq('user_id', user.id);
-      
-      if (intError) throw intError;
+// ── Score bar ─────────────────────────────────────────────────────────────────
+function ScoreBar({ score }: { score: number }) {
+  const pct = Math.min(100, Math.round((score / 10) * 100));
+  const color = scoreColor(score);
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+      <View style={{ flex: 1, height: 5, backgroundColor: '#e2e8f0', borderRadius: 99, overflow: 'hidden' }}>
+        <View style={{ width: `${pct}%` as any, height: '100%', backgroundColor: color, borderRadius: 99 }} />
+      </View>
+      <Text style={{ fontSize: 12, fontWeight: '700', color, minWidth: 32 }}>
+        {score.toFixed(1)}/10
+      </Text>
+    </View>
+  );
+}
 
-      // 3. Merge data
-      const merged = (apps || []).map(app => ({
-        ...app,
-        interviews: interviews?.filter(i => i.job_id === app.job_id) || []
-      }));
+// ── Interview card ────────────────────────────────────────────────────────────
+function InterviewCard({ item, navigation }: { item: any; navigation: any }) {
+  const iv = item.interview;
+  const fitmentColor = FITMENT_COLOR[iv?.fitment] ?? theme.colors.textSecondary;
+  const adminStatus = iv?.admin_status;
 
-      setApplications(merged);
-    } catch (err) {
-      console.error('Error fetching history:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'shortlisted': return '#16a34a';
-      case 'rejected': return '#dc2626';
-      case 'marked_for_training': return '#ea580c';
-      default: return theme.colors.primary;
-    }
-  };
-
-  const renderItem = ({ item }: { item: any }) => (
-    <AppCard 
-      style={styles.card} 
-      onPress={() => navigation.navigate('JobDetail', { jobId: item.jobs.id })}
-    >
-      <View style={styles.cardHeader}>
+  return (
+    <View style={cardStyles.container}>
+      {/* Header row */}
+      <View style={cardStyles.header}>
         <View style={{ flex: 1 }}>
-          <Text style={styles.jobTitle}>{item.jobs?.title}</Text>
-          <Text style={styles.companyName}>{item.jobs?.companies?.company_name}</Text>
+          {item.jobs ? (
+            <>
+              <Text style={cardStyles.title} numberOfLines={1}>{item.jobs.title}</Text>
+              <Text style={cardStyles.subtitle}>{item.jobs.companies?.company_name}</Text>
+            </>
+          ) : (
+            <>
+              <Text style={cardStyles.title}>
+                {iv?.trade ? `${iv.trade} Interview` : 'Practice Interview'}
+              </Text>
+              <Text style={cardStyles.subtitle}>Standalone Assessment</Text>
+            </>
+          )}
         </View>
-        <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.status) + '15' }]}>
-          <Text style={[styles.statusText, { color: getStatusColor(item.status) }]}>
-            {item.status?.toUpperCase()}
+        <View style={{ alignItems: 'flex-end', gap: 4 }}>
+          {/* Admin decision badge */}
+          {adminStatus && (
+            <View style={[cardStyles.adminBadge, { backgroundColor: ADMIN_STATUS_COLOR[adminStatus] }]}>
+              <Text style={cardStyles.adminBadgeText}>
+                {adminStatus === 'marked_for_training' ? 'TRAINING' : adminStatus.toUpperCase()}
+              </Text>
+            </View>
+          )}
+          {/* Date */}
+          <Text style={cardStyles.date}>
+            {new Date(item.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
           </Text>
         </View>
       </View>
 
-      <View style={styles.cardFooter}>
-        <View style={styles.infoRow}>
-          <Ionicons name="calendar-outline" size={14} color={theme.colors.textSecondary} />
-          <Text style={styles.infoText}>{new Date(item.created_at).toLocaleDateString()}</Text>
-        </View>
-        
-        {item.interviews?.[0] && (
-          <View style={styles.scoreBadge}>
-            <Text style={styles.scoreText}>Score: {Math.round(Number(item.interviews[0].average_score || 0))}%</Text>
+      {/* Interview result — only if interview data exists */}
+      {iv && (
+        <>
+          {/* Score + confidence row */}
+          <View style={cardStyles.metricsRow}>
+            <View style={cardStyles.metricBox}>
+              <Text style={cardStyles.metricLabel}>Score</Text>
+              <Text style={[cardStyles.metricValue, { color: scoreColor(iv.average_score ?? 0) }]}>
+                {iv.average_score != null ? `${Number(iv.average_score).toFixed(1)}/10` : '—'}
+              </Text>
+            </View>
+            <View style={cardStyles.metricDivider} />
+            <View style={cardStyles.metricBox}>
+              <Text style={cardStyles.metricLabel}>Confidence</Text>
+              <Text style={[cardStyles.metricValue, { color: theme.colors.primary }]}>
+                {iv.confidence_score != null ? `${Number(iv.confidence_score).toFixed(0)}%` : '—'}
+              </Text>
+            </View>
+            <View style={cardStyles.metricDivider} />
+            <View style={[cardStyles.metricBox, { flex: 2 }]}>
+              <Text style={cardStyles.metricLabel}>Fitment</Text>
+              <Text style={[cardStyles.metricValue, { color: fitmentColor, fontSize: 12 }]} numberOfLines={1}>
+                {iv.fitment ?? '—'}
+              </Text>
+            </View>
           </View>
-        )}
-      </View>
-    </AppCard>
+
+          {/* Per-question scores */}
+          {iv.scores?.length > 0 && (
+            <View style={cardStyles.section}>
+              <Text style={cardStyles.sectionLabel}>Question Scores</Text>
+              {iv.scores.map((s: number, i: number) => (
+                <View key={i} style={cardStyles.scoreRow}>
+                  <Text style={cardStyles.qLabel}>Q{i + 1}</Text>
+                  <ScoreBar score={s} />
+                </View>
+              ))}
+            </View>
+          )}
+
+          {/* Weak topics */}
+          {iv.weak_topics?.length > 0 && (
+            <View style={cardStyles.section}>
+              <Text style={cardStyles.sectionLabel}>Topics to Review</Text>
+              <View style={cardStyles.tagsRow}>
+                {iv.weak_topics.map((t: string, i: number) => (
+                  <View key={i} style={cardStyles.weakTag}>
+                    <Text style={cardStyles.weakTagText}>{t}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          )}
+
+          {/* Strengths */}
+          {iv.feedback?.strengths?.length > 0 && (
+            <View style={cardStyles.section}>
+              <Text style={cardStyles.sectionLabel}>Strengths</Text>
+              {iv.feedback.strengths.map((s: string, i: number) => (
+                <View key={i} style={cardStyles.feedbackRow}>
+                  <Ionicons name="checkmark-circle" size={14} color="#10b981" />
+                  <Text style={cardStyles.feedbackText}>{s}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+
+          {/* Improvements */}
+          {iv.feedback?.improvements?.length > 0 && (
+            <View style={cardStyles.section}>
+              <Text style={cardStyles.sectionLabel}>Areas to Improve</Text>
+              {iv.feedback.improvements.map((s: string, i: number) => (
+                <View key={i} style={cardStyles.feedbackRow}>
+                  <Ionicons name="alert-circle" size={14} color="#f59e0b" />
+                  <Text style={cardStyles.feedbackText}>{s}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+
+          {/* Integrity flag */}
+          {iv.integrity_flag && (
+            <View style={cardStyles.flagRow}>
+              <Ionicons name="warning" size={14} color="#92400e" />
+              <Text style={cardStyles.flagText}>
+                This interview has been flagged for manual review.
+              </Text>
+            </View>
+          )}
+        </>
+      )}
+    </View>
   );
+}
+
+const cardStyles = StyleSheet.create({
+  container: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  header: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 14 },
+  title: { fontSize: 16, fontWeight: '700', color: theme.colors.text, marginBottom: 2 },
+  subtitle: { fontSize: 13, color: theme.colors.primary, fontWeight: '600' },
+  date: { fontSize: 11, color: theme.colors.textSecondary },
+  adminBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+  adminBadgeText: { color: '#fff', fontSize: 10, fontWeight: '800' },
+
+  metricsRow: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#f8fafc', borderRadius: 12, padding: 12, marginBottom: 14,
+  },
+  metricBox: { flex: 1, alignItems: 'center' },
+  metricLabel: { fontSize: 10, color: theme.colors.textSecondary, fontWeight: '600', marginBottom: 3, textTransform: 'uppercase' },
+  metricValue: { fontSize: 15, fontWeight: '800' },
+  metricDivider: { width: 1, height: 32, backgroundColor: '#e2e8f0', marginHorizontal: 8 },
+
+  section: { marginBottom: 12 },
+  sectionLabel: { fontSize: 12, fontWeight: '700', color: theme.colors.textSecondary, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.4 },
+
+  scoreRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  qLabel: { fontSize: 12, fontWeight: '700', color: theme.colors.textSecondary, width: 24 },
+
+  tagsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  weakTag: { backgroundColor: '#fee2e2', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 99 },
+  weakTagText: { fontSize: 11, color: '#991b1b', fontWeight: '600' },
+
+  feedbackRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, marginBottom: 5 },
+  feedbackText: { flex: 1, fontSize: 13, color: theme.colors.textSecondary, lineHeight: 18 },
+
+  flagRow: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 7,
+    backgroundColor: '#fffbeb', padding: 10, borderRadius: 8, marginTop: 4,
+  },
+  flagText: { flex: 1, fontSize: 12, color: '#92400e' },
+});
+
+// ── Main screen ───────────────────────────────────────────────────────────────
+
+export const HistoryScreen = ({ navigation }: any) => {
+  const [items, setItems] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const { user } = useContext(AuthContext);
+
+  const fetchHistory = useCallback(async () => {
+    if (!user) return;
+    setLoading(true);
+    try {
+      // Strategy 1: fetch by user_id (works when RLS policy is set up correctly)
+      let interviews: any[] = [];
+      const { data: byUserId, error: e1 } = await supabase
+        .from('interviews')
+        .select('id, candidate_name, phone_number, trade, language, district, category, fitment, average_score, confidence_score, integrity_flag, scores, weak_topics, feedback, job_id, created_at')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+
+      if (!e1 && byUserId && byUserId.length > 0) {
+        interviews = byUserId;
+      } else {
+        // Strategy 2: fetch by email match via profiles (fallback when user_id RLS blocks)
+        // Get the user's email from auth
+        const { data: { user: authUser } } = await supabase.auth.getUser();
+        const email = authUser?.email;
+
+        if (email) {
+          // Find profile to get phone number
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('phone, full_name')
+            .eq('id', user.id)
+            .maybeSingle();
+
+          // Try fetching by phone number (voice bot always saves this)
+          if (profile?.phone) {
+            const { data: byPhone } = await supabase
+              .from('interviews')
+              .select('id, candidate_name, phone_number, trade, language, district, category, fitment, average_score, confidence_score, integrity_flag, scores, weak_topics, feedback, job_id, created_at')
+              .eq('phone_number', profile.phone)
+              .order('created_at', { ascending: false });
+            if (byPhone && byPhone.length > 0) {
+              interviews = byPhone;
+            }
+          }
+
+          // If still nothing, try by candidate_name
+          if (interviews.length === 0 && profile?.full_name) {
+            const { data: byName } = await supabase
+              .from('interviews')
+              .select('id, candidate_name, phone_number, trade, language, district, category, fitment, average_score, confidence_score, integrity_flag, scores, weak_topics, feedback, job_id, created_at')
+              .ilike('candidate_name', profile.full_name)
+              .order('created_at', { ascending: false });
+            if (byName && byName.length > 0) {
+              interviews = byName;
+            }
+          }
+        }
+
+        if (e1) {
+          console.warn('[History] user_id query failed:', e1.message, '— trying fallback strategies');
+        }
+      }
+
+      // Try to get admin_status (graceful if column doesn't exist yet)
+      const adminStatusMap: Record<string, string> = {};
+      if (interviews.length > 0) {
+        try {
+          const ids = interviews.map(iv => iv.id);
+          const { data: statusRows } = await supabase
+            .from('interviews')
+            .select('id, admin_status')
+            .in('id', ids);
+          (statusRows || []).forEach((r: any) => {
+            if (r.admin_status) adminStatusMap[r.id] = r.admin_status;
+          });
+        } catch {
+          // admin_status column doesn't exist yet — ignore
+        }
+      }
+
+      // Fetch applications to get job info
+      const { data: apps } = await supabase
+        .from('applications')
+        .select('job_id, status, jobs(id, title, companies(company_name))')
+        .eq('user_id', user.id);
+
+      const appMap: Record<string, any> = {};
+      (apps || []).forEach((a: any) => {
+        if (a.job_id) appMap[a.job_id] = a;
+      });
+
+      const merged = interviews.map((iv: any) => {
+        const app = iv.job_id ? appMap[iv.job_id] : null;
+        return {
+          id: iv.id,
+          created_at: iv.created_at,
+          jobs: app?.jobs ?? null,
+          interview: { ...iv, admin_status: adminStatusMap[iv.id] ?? null },
+        };
+      });
+
+      setItems(merged);
+    } catch (err) {
+      console.error('History fetch error:', err);
+      setItems([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [user]);
+
+  useEffect(() => { fetchHistory(); }, [fetchHistory]);
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>My Applications</Text>
+        <Text style={styles.headerTitle}>My Interviews</Text>
         <TouchableOpacity onPress={fetchHistory} style={styles.refreshBtn}>
           <Ionicons name="refresh" size={20} color={theme.colors.primary} />
         </TouchableOpacity>
@@ -118,15 +362,18 @@ export const HistoryScreen = ({ navigation }: any) => {
         </View>
       ) : (
         <FlatList
-          data={applications}
-          renderItem={renderItem}
+          data={items}
+          renderItem={({ item }) => <InterviewCard item={item} navigation={navigation} />}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
-              <Ionicons name="briefcase-outline" size={64} color={theme.colors.border} />
-              <Text style={styles.emptyText}>You haven't applied for any jobs yet.</Text>
+              <Ionicons name="mic-outline" size={64} color={theme.colors.border} />
+              <Text style={styles.emptyTitle}>No interviews yet</Text>
+              <Text style={styles.emptyText}>
+                Complete an interview to see your results here.
+              </Text>
             </View>
           }
         />
@@ -136,101 +383,17 @@ export const HistoryScreen = ({ navigation }: any) => {
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: theme.colors.background,
-  },
+  container: { flex: 1, backgroundColor: theme.colors.background },
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingVertical: 16,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: 24, paddingVertical: 16,
+    backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: theme.colors.border,
   },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: theme.colors.text,
-  },
-  refreshBtn: {
-    padding: 8,
-  },
-  loader: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  listContent: {
-    padding: 20,
-  },
-  card: {
-    marginBottom: 16,
-    padding: 16,
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 12,
-  },
-  jobTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: theme.colors.text,
-    marginBottom: 2,
-  },
-  companyName: {
-    fontSize: 14,
-    color: theme.colors.primary,
-    fontWeight: '600',
-  },
-  statusBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  statusText: {
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  cardFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
-  },
-  infoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  infoText: {
-    fontSize: 12,
-    color: theme.colors.textSecondary,
-    marginLeft: 4,
-  },
-  scoreBadge: {
-    backgroundColor: theme.colors.secondary + '15',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  scoreText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: theme.colors.secondary,
-  },
-  emptyContainer: {
-    alignItems: 'center',
-    marginTop: 100,
-  },
-  emptyText: {
-    fontSize: 16,
-    color: theme.colors.textSecondary,
-    marginTop: 16,
-  },
+  headerTitle: { fontSize: 20, fontWeight: '800', color: theme.colors.text },
+  refreshBtn: { padding: 8 },
+  loader: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  listContent: { padding: 16, paddingBottom: 40 },
+  emptyContainer: { alignItems: 'center', marginTop: 100, gap: 10 },
+  emptyTitle: { fontSize: 18, fontWeight: '700', color: theme.colors.text },
+  emptyText: { fontSize: 14, color: theme.colors.textSecondary, textAlign: 'center' },
 });

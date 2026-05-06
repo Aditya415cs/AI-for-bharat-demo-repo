@@ -45,24 +45,32 @@ export const updateUserProfile = async (updates: {
   full_name?: string; 
   trade?: string; 
   experience?: string;
+  phone?: string;
+  age?: string;
+  gender?: string;
+  district?: string;
+  experience_level?: string;
+  skills?: string[];
+  education?: string;
+  work_preference?: string;
 }) => {
   // 1. Update Auth User Metadata
   const { data: authData, error: authError } = await supabase.auth.updateUser({
     data: { 
       full_name: updates.full_name,
       trade: updates.trade,
-      experience: updates.experience,
     }
   });
 
   if (authError) throw authError;
 
-  // 2. Update profiles Table
+  // 2. Update profiles Table with ALL fields
   if (authData.user) {
     const { error: profileError } = await supabase
       .from('profiles')
       .upsert({
         id: authData.user.id,
+        email: authData.user.email,
         ...updates,
         updated_at: new Date(),
       });

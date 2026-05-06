@@ -1,4 +1,4 @@
-import React, { useContext } from 'react';
+import React, { useContext, useEffect, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, StatusBar } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -6,11 +6,80 @@ import { AuthContext } from '../../context/AuthContext';
 import { theme } from '../../theme';
 import { AppCard } from '../../components/AppCard';
 import { AppButton } from '../../components/AppButton';
+import { supabase } from '../../services/supabase/config';
 
 export const HomeScreen: React.FC<any> = ({ navigation }) => {
-  const { profile, t, language } = useContext(AuthContext);
-
+  const { profile, user, t, language } = useContext(AuthContext);
   const langCode = language?.toUpperCase() || 'EN';
+
+  const [stats, setStats] = useState({ interviews: 0, avgScore: '—' });
+
+  const loadStats = useCallback(async () => {
+    if (!user) return;
+    try {
+      // Strategy 1: by user_id
+      let data: any[] | null = null;
+      const { data: d1, error: e1 } = await supabase
+        .from('interviews')
+        .select('average_score')
+        .eq('user_id', user.id);
+
+      if (!e1 && d1 && d1.length > 0) {
+        data = d1;
+      } else {
+        // Strategy 2: by phone number
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('phone, full_name')
+          .eq('id', user.id)
+          .maybeSingle();
+
+        if (profile?.phone) {
+          const { data: d2 } = await supabase
+            .from('interviews')
+            .select('average_score')
+            .eq('phone_number', profile.phone);
+          if (d2 && d2.length > 0) data = d2;
+        }
+
+        // Strategy 3: by candidate name
+        if (!data && profile?.full_name) {
+          const { data: d3 } = await supabase
+            .from('interviews')
+            .select('average_score')
+            .ilike('candidate_name', profile.full_name);
+          if (d3 && d3.length > 0) data = d3;
+        }
+
+        if (e1) console.warn('[HomeScreen] user_id stats query failed:', e1.message);
+      }
+
+      if (data && data.length > 0) {
+        const validScores = data.filter(r => r.average_score != null);
+        const avg = validScores.length > 0
+          ? validScores.reduce((sum, r) => sum + Number(r.average_score), 0) / validScores.length
+          : 0;
+        setStats({
+          interviews: data.length,
+          avgScore: validScores.length > 0 ? `${avg.toFixed(1)}/10` : '—',
+        });
+      } else {
+        setStats({ interviews: 0, avgScore: '—' });
+      }
+    } catch (err) {
+      console.error('[HomeScreen] Stats error:', err);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    loadStats();
+  }, [loadStats]);
+
+  // Refresh stats every time the screen comes into focus
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', loadStats);
+    return unsubscribe;
+  }, [navigation, loadStats]);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -77,11 +146,11 @@ export const HomeScreen: React.FC<any> = ({ navigation }) => {
         <View style={styles.statsRow}>
           <AppCard style={styles.statCard}>
             <Text style={styles.statLabel}>{t('interviews')}</Text>
-            <Text style={styles.statValue}>12</Text>
+            <Text style={styles.statValue}>{stats.interviews}</Text>
           </AppCard>
           <AppCard style={styles.statCard}>
             <Text style={styles.statLabel}>{t('avg_score')}</Text>
-            <Text style={styles.statValue}>84%</Text>
+            <Text style={styles.statValue}>{stats.avgScore}</Text>
           </AppCard>
         </View>
 

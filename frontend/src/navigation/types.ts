@@ -24,9 +24,10 @@ export type MainStackParamList = {
     candidateName: string;
     trade: string;
     phoneNumber: string;
+    email: string;
   };
-  Processing: { jobId: string };
-  Result: { jobId?: string; resultData: any };
+  Processing: { jobId?: string; email: string };
+  Result: { jobId?: string; phoneNumber?: string; resultData?: any };
   EditProfile: undefined;
   JobDetail: { jobId: string };
   Help: undefined;

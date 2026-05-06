@@ -13,6 +13,8 @@ export interface StartInterviewPayload {
   candidate_name: string;
   trade: string;
   phone_number: string;
+  email: string;
+  job_id?: string;
 }
 
 export interface StartInterviewResponse {
@@ -25,12 +27,21 @@ export interface StartInterviewResponse {
 }
 
 export interface InterviewResult {
+  id: number;
   candidate_name: string;
+  phone_number: string;
   trade: string;
-  /** e.g. "Highly Fit" | "Fit" | "Needs Improvement" */
+  language: string;
+  district: string | null;
+  category: string;
   fitment: string;
   average_score: number;
+  confidence_score: number | null;
+  integrity_flag: boolean;
+  scores: number[];
   weak_topics: string[];
+  feedback: { strengths: string[]; improvements: string[] } | null;
+  transcript: { role: string; content: string }[] | null;
   interview_date: string;
 }
 
@@ -88,20 +99,99 @@ export async function getResults(trade?: string): Promise<InterviewResult[]> {
   try {
     response = await fetch(url, {
       method: 'GET',
-      headers: {
-        'X-API-Key': ENV.BACKEND_API_KEY,
-      },
+      headers: { 'X-API-Key': ENV.BACKEND_API_KEY },
     });
-  } catch (networkError) {
-    throw new Error(
-      'Could not reach the server. Please check your internet connection and try again.'
-    );
+  } catch {
+    throw new Error('Could not reach the server. Please check your internet connection and try again.');
+  }
+
+  if (!response.ok) throw new Error(`Failed to fetch results (${response.status})`);
+  return response.json() as Promise<InterviewResult[]>;
+}
+
+/**
+ * GET /results/latest?phone=<number>&after=<ISO>
+ * Returns the most recent interview result.
+ * Primary method used after an interview ends — no name matching needed.
+ */
+export async function getLatestResult(
+  phoneNumber: string,
+  afterTimestamp: string
+): Promise<InterviewResult> {
+  const params = new URLSearchParams();
+  if (phoneNumber) params.set('phone', phoneNumber);
+  if (afterTimestamp) params.set('after', afterTimestamp);
+  const url = `${ENV.BACKEND_URL}/results/latest?${params.toString()}`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'GET',
+      headers: { 'X-API-Key': ENV.BACKEND_API_KEY },
+    });
+  } catch {
+    throw new Error('Could not reach the server.');
   }
 
   if (!response.ok) {
-    throw new Error(`Failed to fetch results (${response.status})`);
+    if (response.status === 404) throw new Error('Result not ready yet.');
+    throw new Error(`Failed to fetch result (${response.status})`);
+  }
+  return response.json() as Promise<InterviewResult>;
+}
+
+/**
+ * GET /results/by-name/:name?after=ISO_TIMESTAMP
+ * Fallback lookup by candidate name.
+ */
+export async function getResultByName(
+  candidateName: string,
+  afterTimestamp?: string
+): Promise<InterviewResult> {
+  const params = afterTimestamp ? `?after=${encodeURIComponent(afterTimestamp)}` : '';
+  const url = `${ENV.BACKEND_URL}/results/by-name/${encodeURIComponent(candidateName)}${params}`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'GET',
+      headers: { 'X-API-Key': ENV.BACKEND_API_KEY },
+    });
+  } catch {
+    throw new Error('Could not reach the server. Please check your internet connection.');
   }
 
-  const data = await response.json();
-  return data as InterviewResult[];
+  if (!response.ok) {
+    if (response.status === 404) throw new Error('Result not ready yet.');
+    throw new Error(`Failed to fetch result (${response.status})`);
+  }
+  return response.json() as Promise<InterviewResult>;
+}
+
+/**
+ * GET /results/candidate/by-email/:email?after=ISO_TIMESTAMP
+ * Primary lookup — email is unique and always filled.
+ */
+export async function getResultByEmail(
+  email: string,
+  afterTimestamp?: string
+): Promise<InterviewResult> {
+  const params = afterTimestamp ? `?after=${encodeURIComponent(afterTimestamp)}` : '';
+  const url = `${ENV.BACKEND_URL}/results/candidate/by-email/${encodeURIComponent(email)}${params}`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'GET',
+      headers: { 'X-API-Key': ENV.BACKEND_API_KEY },
+    });
+  } catch {
+    throw new Error('Could not reach the server.');
+  }
+
+  if (!response.ok) {
+    if (response.status === 404) throw new Error('Result not ready yet.');
+    throw new Error(`Failed to fetch result (${response.status})`);
+  }
+  return response.json() as Promise<InterviewResult>;
 }

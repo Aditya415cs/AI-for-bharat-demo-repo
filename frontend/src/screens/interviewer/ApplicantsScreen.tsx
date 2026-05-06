@@ -1,5 +1,8 @@
-import React, { useState, useEffect, useContext } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, TextInput, ScrollView } from 'react-native';
+import React, { useState, useEffect, useContext, useCallback, useMemo } from 'react';
+import {
+  View, Text, StyleSheet, FlatList, TouchableOpacity,
+  ActivityIndicator, TextInput, Modal, ScrollView, Pressable,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../../theme';
@@ -7,359 +10,643 @@ import { supabase } from '../../services/supabase/config';
 import { AppCard } from '../../components/AppCard';
 import { AuthContext } from '../../context/AuthContext';
 
-export const InterviewerApplicantsScreen = ({ route, navigation }: any) => {
-  const { user } = useContext(AuthContext);
-  const { jobId } = route.params || {};
-  const [applicants, setApplicants] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState('all'); // all, pending, shortlisted, rejected
-  
-  useEffect(() => {
-    if (user) fetchApplicants();
-    const unsubscribe = navigation.addListener('focus', () => {
-      if (user) fetchApplicants();
-    });
-    return unsubscribe;
-  }, [navigation, jobId, user]);
+// ── Types ─────────────────────────────────────────────────────────────────────
+type Candidate = {
+  id: string;           // interview id
+  userId: string | null;
+  jobId: string | null;
+  applicationId: string | null;
+  name: string;
+  trade: string;
+  district: string;
+  language: string;
+  category: string;
+  score: number;
+  confidence: number;
+  fitment: string;
+  integrityFlag: boolean;
+  appStatus: string;
+  interviewDate: string;
+  weakTopics: string[];
+  feedback: any;
+  scores: number[];
+};
 
-  const fetchApplicants = async () => {
+// ── Fitment helpers ───────────────────────────────────────────────────────────
+const FITMENT_COLOR: Record<string, string> = {
+  'Job-Ready': '#10b981',
+  'Requires Training': '#f59e0b',
+  'Low Confidence': '#ef4444',
+  'Requires Significant Upskilling': '#8b5cf6',
+  'Requires Manual Verification': '#0ea5e9',
+};
+const FITMENT_BG: Record<string, string> = {
+  'Job-Ready': '#f0fdf4',
+  'Requires Training': '#fffbeb',
+  'Low Confidence': '#fef2f2',
+  'Requires Significant Upskilling': '#f5f3ff',
+  'Requires Manual Verification': '#f0f9ff',
+};
+const STATUS_COLOR: Record<string, string> = {
+  shortlisted: '#10b981',
+  rejected: '#ef4444',
+  marked_for_training: '#8b5cf6',
+  applied: '#64748b',
+  pending: '#64748b',
+};
+
+function scoreColor(s: number) {
+  if (s >= 7.5) return '#10b981';
+  if (s >= 5) return '#f59e0b';
+  return '#ef4444';
+}
+
+// ── Filter chip ───────────────────────────────────────────────────────────────
+function Chip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  return (
+    <TouchableOpacity
+      style={[styles.chip, active && styles.chipActive]}
+      onPress={onPress}
+      activeOpacity={0.7}
+    >
+      <Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+// ── Main screen ───────────────────────────────────────────────────────────────
+export const InterviewerApplicantsScreen = ({ route, navigation }: any) => {
+  const { user, profile } = useContext(AuthContext);
+  const isAdmin = profile?.role === 'admin';
+  const { jobId, filterFlagged } = route.params || {};
+
+  const [allCandidates, setAllCandidates] = useState<Candidate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showFilters, setShowFilters] = useState(false);
+
+  // Filters
+  const [search, setSearch] = useState('');
+  const [filterFitment, setFilterFitment] = useState('All');
+  const [filterCategory, setFilterCategory] = useState('All');
+  const [filterLanguage, setFilterLanguage] = useState('All');
+  const [filterDistrict, setFilterDistrict] = useState('All');
+  const [filterStatus, setFilterStatus] = useState('all');
+  const [filterMinScore, setFilterMinScore] = useState('');
+  const [filterMaxScore, setFilterMaxScore] = useState('');
+  const [onlyFlagged, setOnlyFlagged] = useState(filterFlagged ?? false);
+
+  // Re-sync onlyFlagged when route params change (e.g. navigating from Dashboard)
+  useEffect(() => {
+    if (filterFlagged !== undefined) {
+      setOnlyFlagged(filterFlagged);
+    }
+  }, [filterFlagged]);
+
+  // Unique filter options derived from data
+  const districts = useMemo(() => {
+    const s = new Set(allCandidates.map(c => c.district).filter(Boolean));
+    return ['All', ...Array.from(s).sort()];
+  }, [allCandidates]);
+
+  const languages = useMemo(() => {
+    const s = new Set(allCandidates.map(c => c.language).filter(Boolean));
+    return ['All', ...Array.from(s).sort()];
+  }, [allCandidates]);
+
+  const fetchCandidates = useCallback(async () => {
     if (!user) return;
     setLoading(true);
     try {
-      // If no specific jobId is provided, we first need to find all jobs owned by this interviewer
-      let targetJobIds = jobId ? [jobId] : [];
-      
-      if (!jobId) {
+      // Fetch all interviews — admin sees all, employer sees for their jobs
+      const ivQuery = supabase
+        .from('interviews')
+        .select('id, user_id, job_id, candidate_name, trade, language, district, category, fitment, average_score, confidence_score, integrity_flag, weak_topics, feedback, scores, created_at, admin_status')
+        .order('created_at', { ascending: false });
+
+      if (!isAdmin) {
+        // Get employer's job IDs
         const { data: myJobs } = await supabase
-          .from('jobs')
-          .select('id')
-          .eq('created_by', user.id);
-        
-        if (myJobs && myJobs.length > 0) {
-          targetJobIds = myJobs.map(j => j.id);
+          .from('jobs').select('id').eq('created_by', user.id);
+        const jobIds = (myJobs || []).map((j: any) => j.id);
+
+        if (jobIds.length > 0) {
+          // Get user_ids of applicants for this employer's jobs
+          const { data: apps } = await supabase
+            .from('applications').select('user_id').in('job_id', jobIds);
+          const applicantUserIds = [...new Set((apps || []).map((a: any) => a.user_id).filter(Boolean))];
+
+          if (applicantUserIds.length > 0) {
+            // Show interviews for these users (includes voice bot interviews without job_id)
+            ivQuery.in('user_id', applicantUserIds);
+          } else {
+            // No applicants yet — show nothing
+            setAllCandidates([]);
+            setLoading(false);
+            return;
+          }
         } else {
-          // No jobs owned, so no applicants to show
-          setApplicants([]);
+          setAllCandidates([]);
           setLoading(false);
           return;
         }
       }
 
-      let query = supabase
-        .from('applications')
-        .select(`
-          id,
-          status,
-          user_id,
-          job_id,
-          profiles (
-            full_name, 
-            trade, 
-            district,
-            interviews (average_score, classification, confidence_score, job_id)
-          )
-        `)
-        .in('job_id', targetJobIds);
+      if (jobId) ivQuery.eq('job_id', jobId);
 
-      const { data, error } = await query;
-
+      const { data: interviews, error } = await ivQuery;
       if (error) throw error;
-      
-      const transformed = (data || []).map(app => {
-        const jobInterview = (app.profiles as any)?.interviews?.find((i: any) => i.job_id === app.job_id) || 
-                            (app.profiles as any)?.interviews?.[0];
 
-        // Map 'applied' to 'pending' for consistency if needed
-        const normalizedStatus = app.status === 'applied' ? 'pending' : app.status;
+      // Fetch application statuses for matched user+job pairs
+      const userJobPairs = (interviews || [])
+        .filter((i: any) => i.user_id && i.job_id)
+        .map((i: any) => ({ user_id: i.user_id, job_id: i.job_id }));
 
+      let appMap: Record<string, string> = {};
+      let appIdMap: Record<string, string> = {};
+      if (userJobPairs.length > 0) {
+        const userIds = [...new Set(userJobPairs.map(p => p.user_id))];
+        const { data: apps } = await supabase
+          .from('applications')
+          .select('id, user_id, job_id, status')
+          .in('user_id', userIds);
+        (apps || []).forEach((a: any) => {
+          const key = `${a.user_id}__${a.job_id}`;
+          appMap[key] = a.status;
+          appIdMap[key] = a.id;
+        });
+      }
+
+      const candidates: Candidate[] = (interviews || []).map((iv: any) => {
+        const key = `${iv.user_id}__${iv.job_id}`;
         return {
-          id: app.id,
-          userId: app.user_id,
-          jobId: app.job_id,
-          name: (app.profiles as any)?.full_name || 'Unknown',
-          trade: (app.profiles as any)?.trade || 'N/A',
-          district: (app.profiles as any)?.district || 'N/A',
-          score: Math.round(Number(jobInterview?.average_score || 0)),
-          classification: jobInterview?.classification || 'Pending',
-          confidence: jobInterview?.confidence_score || 0,
-          status: normalizedStatus
+          id: iv.id,
+          userId: iv.user_id,
+          jobId: iv.job_id,
+          applicationId: appIdMap[key] ?? null,
+          name: iv.candidate_name || 'Unknown',
+          trade: iv.trade || '—',
+          district: iv.district || '—',
+          language: iv.language || '—',
+          category: iv.category || 'Unknown',
+          score: Number(iv.average_score || 0),
+          confidence: Number(iv.confidence_score || 0),
+          fitment: iv.fitment || 'Pending',
+          integrityFlag: iv.integrity_flag || false,
+          // Use admin_status if set, otherwise fall back to application status
+          appStatus: iv.admin_status || appMap[key] || 'applied',
+          interviewDate: iv.created_at,
+          weakTopics: iv.weak_topics || [],
+          feedback: iv.feedback || null,
+          scores: iv.scores || [],
         };
       });
 
-      const sorted = transformed.sort((a, b) => {
-        if (b.score !== a.score) return b.score - a.score;
-        return b.confidence - a.confidence;
-      });
-
-      setApplicants(sorted);
+      setAllCandidates(candidates);
     } catch (err) {
-      console.error('Error fetching applicants:', err);
+      console.error('Error fetching candidates:', err);
     } finally {
       setLoading(false);
     }
+  }, [user, isAdmin, jobId]);
+
+  useEffect(() => { fetchCandidates(); }, [fetchCandidates]);
+  useEffect(() => {
+    const unsub = navigation.addListener('focus', fetchCandidates);
+    return unsub;
+  }, [navigation, fetchCandidates]);
+
+  // Apply filters
+  const filtered = useMemo(() => {
+    return allCandidates.filter(c => {
+      if (search && !c.name.toLowerCase().includes(search.toLowerCase()) &&
+          !c.trade.toLowerCase().includes(search.toLowerCase())) return false;
+      if (filterFitment !== 'All' && c.fitment !== filterFitment) return false;
+      if (filterCategory !== 'All' && c.category !== filterCategory) return false;
+      if (filterLanguage !== 'All' && c.language !== filterLanguage) return false;
+      if (filterDistrict !== 'All' && c.district !== filterDistrict) return false;
+      if (filterStatus !== 'all' && c.appStatus !== filterStatus) return false;
+      if (filterMinScore && c.score < parseFloat(filterMinScore)) return false;
+      if (filterMaxScore && c.score > parseFloat(filterMaxScore)) return false;
+      if (onlyFlagged && !c.integrityFlag) return false;
+      return true;
+    });
+  }, [allCandidates, search, filterFitment, filterCategory, filterLanguage, filterDistrict, filterStatus, filterMinScore, filterMaxScore, onlyFlagged]);
+
+  const activeFilterCount = [
+    filterFitment !== 'All', filterCategory !== 'All', filterLanguage !== 'All',
+    filterDistrict !== 'All', filterStatus !== 'all', !!filterMinScore, !!filterMaxScore, onlyFlagged,
+  ].filter(Boolean).length;
+
+  const clearFilters = () => {
+    setFilterFitment('All'); setFilterCategory('All'); setFilterLanguage('All');
+    setFilterDistrict('All'); setFilterStatus('all'); setFilterMinScore('');
+    setFilterMaxScore(''); setOnlyFlagged(false);
   };
 
-  const filteredApplicants = applicants.filter(app => {
-    if (filter === 'all') return true;
-    return app.status === filter;
-  });
+  const updateAppStatus = async (candidate: Candidate, status: string) => {
+    // Optimistic update
+    setAllCandidates(prev => prev.map(c =>
+      c.id === candidate.id ? { ...c, appStatus: status } : c
+    ));
+    try {
+      // Always write to interviews.admin_status — works without an application record
+      const { error } = await supabase
+        .from('interviews')
+        .update({ admin_status: status })
+        .eq('id', candidate.id);
+      if (error) throw error;
 
-  const renderApplicantItem = ({ item, index }: { item: any, index: number }) => (
-    <AppCard 
-      style={styles.applicantCard}
-      onPress={() => navigation.navigate('CandidateDetail', { candidateId: item.userId, jobId: item.jobId })}
+      // Also update applications table if a record exists (best-effort)
+      if (candidate.applicationId) {
+        await supabase.from('applications').update({ status }).eq('id', candidate.applicationId);
+      } else if (candidate.userId && candidate.jobId) {
+        const { data: app } = await supabase
+          .from('applications')
+          .select('id')
+          .eq('user_id', candidate.userId)
+          .eq('job_id', candidate.jobId)
+          .maybeSingle();
+        if (app?.id) {
+          await supabase.from('applications').update({ status }).eq('id', app.id);
+        }
+      }
+    } catch (err) {
+      console.error('Status update failed:', err);
+      // Rollback
+      setAllCandidates(prev => prev.map(c =>
+        c.id === candidate.id ? { ...c, appStatus: candidate.appStatus } : c
+      ));
+    }
+  };
+
+  const renderItem = ({ item, index }: { item: Candidate; index: number }) => (
+    <TouchableOpacity
+      activeOpacity={0.85}
+      onPress={() => navigation.navigate('CandidateDetail', {
+        candidateId: item.userId,
+        jobId: item.jobId,
+        interviewId: item.id,
+      })}
     >
-      <View style={styles.rankContainer}>
-        <Text style={[styles.rankText, index < 3 && styles.topRank]}>#{index + 1}</Text>
-      </View>
-      
-      <View style={styles.cardMain}>
-        <View style={styles.cardHeader}>
-          <View style={{ flex: 1 }}>
-            <View style={styles.nameRow}>
-              <Text style={styles.candidateName} numberOfLines={1}>{item.name}</Text>
-            </View>
-            <Text style={styles.candidateInfo}>{item.trade} • {item.district}</Text>
+      <AppCard style={[
+        styles.card,
+        ...(item.integrityFlag ? [{ borderLeftWidth: 3, borderLeftColor: '#f59e0b' } as any] : []),
+      ]}>
+        {/* Rank + name row */}
+        <View style={styles.cardTop}>
+          <View style={styles.rankBox}>
+            <Text style={[styles.rank, index < 3 && { color: theme.colors.primary }]}>#{index + 1}</Text>
           </View>
-          <View style={[styles.scoreBadge, { backgroundColor: item.score >= 80 ? '#f0fdf4' : '#fff7ed' }]}>
-            <Text style={[styles.scoreText, { color: item.score >= 80 ? '#16a34a' : '#ea580c' }]}>
-              {item.score}%
+          <View style={{ flex: 1 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={styles.name} numberOfLines={1}>{item.name}</Text>
+              {item.integrityFlag && <Ionicons name="warning" size={13} color="#f59e0b" />}
+            </View>
+            <Text style={styles.sub} numberOfLines={1}>
+              {item.trade}
+              {item.district !== '—' ? ` · ${item.district}` : ''}
+              {item.language !== '—' ? ` · ${item.language}` : ''}
+            </Text>
+          </View>
+          {/* Score */}
+          <View style={[styles.scorePill, { backgroundColor: item.score >= 7.5 ? '#f0fdf4' : item.score >= 5 ? '#fffbeb' : '#fef2f2' }]}>
+            <Text style={[styles.scoreText, { color: scoreColor(item.score) }]}>
+              {item.score > 0 ? `${item.score.toFixed(1)}/10` : '—'}
             </Text>
           </View>
         </View>
 
-        <View style={styles.cardFooter}>
-          <View style={[styles.statusBadgeSmall, { backgroundColor: getStatusColor(item.status) }]}>
-            <Text style={styles.statusTextSmall}>{item.status.toUpperCase()}</Text>
+        {/* Fitment + category + confidence */}
+        <View style={styles.cardMid}>
+          <View style={[styles.fitmentPill, { backgroundColor: FITMENT_BG[item.fitment] ?? '#f1f5f9' }]}>
+            <Text style={[styles.fitmentText, { color: FITMENT_COLOR[item.fitment] ?? '#64748b' }]}>
+              {item.fitment}
+            </Text>
           </View>
-          <Text style={styles.confidenceText}>Confidence: {item.confidence}%</Text>
+          <Text style={styles.categoryText}>{item.category}</Text>
+          {item.confidence > 0 && (
+            <Text style={styles.confText}>Conf: {item.confidence.toFixed(0)}%</Text>
+          )}
         </View>
-      </View>
-    </AppCard>
-  );
 
-  function getStatusColor(status: string) {
-    switch (status) {
-      case 'shortlisted': return '#16a34a';
-      case 'rejected': return '#dc2626';
-      case 'pending': return '#64748b';
-      default: return '#64748b';
-    }
-  }
+        {/* Action buttons — show for all candidates that have a user_id */}
+        {item.userId && (
+          <View style={styles.cardActions}>
+            {/* Status tag — shown when a decision has been made */}
+            {item.appStatus !== 'not_applied' && item.appStatus !== 'applied' ? (
+              <>
+                <View style={[styles.statusTag, { backgroundColor: STATUS_COLOR[item.appStatus] ?? '#64748b' }]}>
+                  <Text style={styles.statusTagText}>{item.appStatus.replace(/_/g, ' ').toUpperCase()}</Text>
+                </View>
+                <TouchableOpacity
+                  style={[styles.actionBtn, { backgroundColor: '#f1f5f9' }]}
+                  onPress={() => updateAppStatus(item, 'applied')}
+                >
+                  <Ionicons name="refresh" size={14} color={theme.colors.textSecondary} />
+                  <Text style={[styles.actionText, { color: theme.colors.textSecondary }]}>Reset</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                <TouchableOpacity
+                  style={[styles.actionBtn, { backgroundColor: '#f0fdf4' }]}
+                  onPress={() => updateAppStatus(item, 'shortlisted')}
+                >
+                  <Ionicons name="checkmark-circle" size={16} color="#10b981" />
+                  <Text style={[styles.actionText, { color: '#10b981' }]}>Shortlist</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.actionBtn, { backgroundColor: '#f5f3ff' }]}
+                  onPress={() => updateAppStatus(item, 'marked_for_training')}
+                >
+                  <Ionicons name="school" size={16} color="#8b5cf6" />
+                  <Text style={[styles.actionText, { color: '#8b5cf6' }]}>Training</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.actionBtn, { backgroundColor: '#fef2f2' }]}
+                  onPress={() => updateAppStatus(item, 'rejected')}
+                >
+                  <Ionicons name="close-circle" size={16} color="#ef4444" />
+                  <Text style={[styles.actionText, { color: '#ef4444' }]}>Reject</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        )}
+      </AppCard>
+    </TouchableOpacity>
+  );
 
   return (
     <SafeAreaView style={styles.container}>
+      {/* Header */}
       <View style={styles.header}>
-        <View style={styles.headerTop}>
-          {jobId && (
-            <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-              <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
-            </TouchableOpacity>
+        {jobId && (
+          <TouchableOpacity onPress={() => navigation.goBack()} style={{ marginRight: 8 }}>
+            <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
+          </TouchableOpacity>
+        )}
+        <Text style={styles.headerTitle}>
+          {onlyFlagged ? '⚑ Flagged Cases' : 'Candidates'}
+        </Text>
+        <TouchableOpacity
+          style={[styles.filterBtn, activeFilterCount > 0 && styles.filterBtnActive]}
+          onPress={() => setShowFilters(true)}
+        >
+          <Ionicons name="options" size={18} color={activeFilterCount > 0 ? '#fff' : theme.colors.primary} />
+          {activeFilterCount > 0 && (
+            <Text style={styles.filterCount}>{activeFilterCount}</Text>
           )}
-          <Text style={styles.headerTitle}>Applicants Ranking</Text>
-        </View>
-        
-        <View style={styles.filterRow}>
-          {['all', 'pending', 'shortlisted', 'rejected'].map((f) => (
-            <TouchableOpacity 
-              key={f}
-              style={[styles.filterBtn, filter === f && styles.filterBtnActive]}
-              onPress={() => setFilter(f)}
-            >
-              <Text style={[styles.filterText, filter === f && styles.filterTextActive]}>
-                {f.charAt(0).toUpperCase() + f.slice(1)}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+        </TouchableOpacity>
       </View>
 
+      {/* Search bar */}
+      <View style={styles.searchBar}>
+        <Ionicons name="search" size={16} color={theme.colors.textSecondary} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Search by name or trade..."
+          placeholderTextColor={theme.colors.textSecondary}
+          value={search}
+          onChangeText={setSearch}
+        />
+        {search.length > 0 && (
+          <TouchableOpacity onPress={() => setSearch('')}>
+            <Ionicons name="close-circle" size={16} color={theme.colors.textSecondary} />
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {/* Active filter chips */}
+      {activeFilterCount > 0 && (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.activeFilters} contentContainerStyle={{ gap: 6, paddingHorizontal: 16 }}>
+          {filterFitment !== 'All' && <Chip label={filterFitment} active onPress={() => setFilterFitment('All')} />}
+          {filterCategory !== 'All' && <Chip label={filterCategory} active onPress={() => setFilterCategory('All')} />}
+          {filterLanguage !== 'All' && <Chip label={filterLanguage} active onPress={() => setFilterLanguage('All')} />}
+          {filterDistrict !== 'All' && <Chip label={filterDistrict} active onPress={() => setFilterDistrict('All')} />}
+          {filterStatus !== 'all' && <Chip label={filterStatus} active onPress={() => setFilterStatus('all')} />}
+          {onlyFlagged && <Chip label="⚑ Flagged" active onPress={() => setOnlyFlagged(false)} />}
+          <TouchableOpacity onPress={clearFilters} style={styles.clearBtn}>
+            <Text style={styles.clearBtnText}>Clear all</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      )}
+
+      {/* Count */}
+      <Text style={styles.countText}>
+        {filtered.length} of {allCandidates.length} candidates
+      </Text>
+
       {loading ? (
-        <View style={styles.loader}>
+        <View style={styles.centered}>
           <ActivityIndicator size="large" color={theme.colors.primary} />
         </View>
       ) : (
         <FlatList
-          data={filteredApplicants}
-          renderItem={renderApplicantItem}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.listContent}
+          data={filtered}
+          renderItem={renderItem}
+          keyExtractor={item => item.id}
+          contentContainerStyle={styles.list}
           showsVerticalScrollIndicator={false}
           ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <Ionicons name="people-outline" size={64} color={theme.colors.border} />
-              <Text style={styles.emptyText}>No applicants found for this criteria.</Text>
+            <View style={styles.empty}>
+              <Ionicons name="people-outline" size={56} color={theme.colors.border} />
+              <Text style={styles.emptyText}>No candidates match the current filters.</Text>
             </View>
           }
         />
       )}
+
+      {/* Filter modal */}
+      <Modal visible={showFilters} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowFilters(false)}>
+        <SafeAreaView style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Filter Candidates</Text>
+            <TouchableOpacity onPress={() => setShowFilters(false)}>
+              <Ionicons name="close" size={24} color={theme.colors.text} />
+            </TouchableOpacity>
+          </View>
+          <ScrollView contentContainerStyle={styles.modalContent}>
+
+            <Text style={styles.filterLabel}>Fitment / Classification</Text>
+            <View style={styles.chipRow}>
+              {[
+                'All',
+                'Job-Ready',
+                'Requires Training',
+                'Low Confidence',
+                'Requires Significant Upskilling',
+                'Requires Manual Verification',
+              ].map(f => (
+                <Chip
+                  key={f}
+                  label={f === 'Requires Significant Upskilling' ? 'Needs Upskilling' : f}
+                  active={filterFitment === f}
+                  onPress={() => setFilterFitment(f)}
+                />
+              ))}
+            </View>
+
+            <Text style={styles.filterLabel}>Category</Text>
+            <View style={styles.chipRow}>
+              {['All', 'Blue-collar Trades', 'Polytechnic-Skilled Roles', 'Semi-Skilled Workforce'].map(c => (
+                <Chip key={c} label={c} active={filterCategory === c} onPress={() => setFilterCategory(c)} />
+              ))}
+            </View>
+
+            <Text style={styles.filterLabel}>Language</Text>
+            <View style={styles.chipRow}>
+              {languages.map(l => (
+                <Chip key={l} label={l} active={filterLanguage === l} onPress={() => setFilterLanguage(l)} />
+              ))}
+            </View>
+
+            <Text style={styles.filterLabel}>District</Text>
+            <View style={styles.chipRow}>
+              {districts.map(d => (
+                <Chip key={d} label={d} active={filterDistrict === d} onPress={() => setFilterDistrict(d)} />
+              ))}
+            </View>
+
+            <Text style={styles.filterLabel}>Application Status</Text>
+            <View style={styles.chipRow}>
+              {['all', 'applied', 'shortlisted', 'marked_for_training', 'rejected'].map(s => (
+                <Chip key={s} label={s === 'all' ? 'All' : s.replace('_', ' ')} active={filterStatus === s} onPress={() => setFilterStatus(s)} />
+              ))}
+            </View>
+
+            <Text style={styles.filterLabel}>Score Range (0–10)</Text>
+            <View style={{ flexDirection: 'row', gap: 12 }}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.filterSubLabel}>Min</Text>
+                <TextInput
+                  style={styles.scoreInput}
+                  placeholder="0"
+                  keyboardType="decimal-pad"
+                  value={filterMinScore}
+                  onChangeText={setFilterMinScore}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.filterSubLabel}>Max</Text>
+                <TextInput
+                  style={styles.scoreInput}
+                  placeholder="10"
+                  keyboardType="decimal-pad"
+                  value={filterMaxScore}
+                  onChangeText={setFilterMaxScore}
+                />
+              </View>
+            </View>
+
+            <Text style={styles.filterLabel}>Integrity</Text>
+            <View style={styles.chipRow}>
+              <Chip label="Show all" active={!onlyFlagged} onPress={() => setOnlyFlagged(false)} />
+              <Chip label="⚑ Flagged only" active={onlyFlagged} onPress={() => setOnlyFlagged(true)} />
+            </View>
+
+          </ScrollView>
+          <View style={styles.modalFooter}>
+            <TouchableOpacity style={styles.clearAllBtn} onPress={clearFilters}>
+              <Text style={styles.clearAllText}>Clear All</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.applyBtn} onPress={() => setShowFilters(false)}>
+              <Text style={styles.applyText}>Apply Filters</Text>
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: theme.colors.background,
-  },
+  container: { flex: 1, backgroundColor: theme.colors.background },
+  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: {
-    backgroundColor: '#fff',
-    paddingBottom: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 16, paddingVertical: 12,
+    backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: theme.colors.border,
   },
-  headerTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  backBtn: {
-    marginRight: 12,
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: theme.colors.text,
-  },
-  filterRow: {
-    flexDirection: 'row',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    gap: 8,
-  },
+  headerTitle: { flex: 1, fontSize: 20, fontWeight: '800', color: theme.colors.text },
   filterBtn: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: '#f1f5f9',
-    borderWidth: 1,
-    borderColor: 'transparent',
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20,
+    backgroundColor: `${theme.colors.primary}15`,
+    borderWidth: 1, borderColor: theme.colors.primary,
   },
-  filterBtnActive: {
-    backgroundColor: theme.colors.primary + '15',
-    borderColor: theme.colors.primary,
+  filterBtnActive: { backgroundColor: theme.colors.primary },
+  filterCount: { fontSize: 12, fontWeight: '800', color: '#fff' },
+  searchBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    margin: 12, paddingHorizontal: 12, paddingVertical: 10,
+    backgroundColor: '#fff', borderRadius: 12,
+    borderWidth: 1, borderColor: theme.colors.border,
   },
-  filterText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: theme.colors.textSecondary,
+  searchInput: { flex: 1, fontSize: 14, color: theme.colors.text },
+  activeFilters: { maxHeight: 44, marginBottom: 4 },
+  countText: {
+    fontSize: 12, color: theme.colors.textSecondary,
+    paddingHorizontal: 16, marginBottom: 8, fontWeight: '600',
   },
-  filterTextActive: {
-    color: theme.colors.primary,
+  list: { padding: 12, paddingBottom: 40 },
+  card: { marginBottom: 10, padding: 14 },
+  cardTop: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
+  rankBox: { width: 32, alignItems: 'center' },
+  rank: { fontSize: 14, fontWeight: '800', color: theme.colors.textSecondary },
+  name: { fontSize: 15, fontWeight: '700', color: theme.colors.text },
+  sub: { fontSize: 12, color: theme.colors.textSecondary, marginTop: 1 },
+  scorePill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
+  scoreText: { fontSize: 13, fontWeight: '800' },
+  cardMid: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' },
+  fitmentPill: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 99 },
+  fitmentText: { fontSize: 11, fontWeight: '700' },
+  categoryText: { fontSize: 11, color: theme.colors.textSecondary, fontWeight: '600' },
+  confText: { fontSize: 11, color: theme.colors.textSecondary },
+  cardActions: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', borderTopWidth: 1, borderTopColor: '#f1f5f9', paddingTop: 10 },
+  actionBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
+  actionText: { fontSize: 12, fontWeight: '700' },
+  statusTag: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
+  statusTagText: { fontSize: 10, color: '#fff', fontWeight: '800' },
+  empty: { alignItems: 'center', marginTop: 80, gap: 12 },
+  emptyText: { fontSize: 14, color: theme.colors.textSecondary, textAlign: 'center' },
+  chip: {
+    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 99,
+    backgroundColor: '#f1f5f9', borderWidth: 1, borderColor: 'transparent',
   },
-  loader: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
+  chipActive: { backgroundColor: `${theme.colors.primary}15`, borderColor: theme.colors.primary },
+  chipText: { fontSize: 12, fontWeight: '600', color: theme.colors.textSecondary },
+  chipTextActive: { color: theme.colors.primary },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 20 },
+  clearBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 99, backgroundColor: '#fee2e2' },
+  clearBtnText: { fontSize: 12, fontWeight: '700', color: '#ef4444' },
+  // Modal
+  modalContainer: { flex: 1, backgroundColor: '#fff' },
+  modalHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    padding: 20, borderBottomWidth: 1, borderBottomColor: theme.colors.border,
   },
-  listContent: {
-    padding: 16,
-  },
-  applicantCard: {
-    flexDirection: 'row',
-    marginBottom: 12,
-    padding: 0,
-    overflow: 'hidden',
-  },
-  rankContainer: {
-    width: 44,
+  modalTitle: { fontSize: 20, fontWeight: '800', color: theme.colors.text },
+  modalContent: { padding: 20 },
+  filterLabel: { fontSize: 13, fontWeight: '700', color: theme.colors.text, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
+  filterSubLabel: { fontSize: 12, color: theme.colors.textSecondary, marginBottom: 6 },
+  scoreInput: {
+    borderWidth: 1, borderColor: theme.colors.border, borderRadius: 10,
+    paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, color: theme.colors.text,
     backgroundColor: '#f8fafc',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderRightWidth: 1,
-    borderRightColor: '#f1f5f9',
   },
-  rankText: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: theme.colors.textSecondary,
+  modalFooter: {
+    flexDirection: 'row', gap: 12, padding: 20,
+    borderTopWidth: 1, borderTopColor: theme.colors.border,
   },
-  topRank: {
-    color: theme.colors.primary,
-    fontSize: 18,
+  clearAllBtn: {
+    flex: 1, paddingVertical: 14, borderRadius: 12,
+    borderWidth: 1, borderColor: theme.colors.border, alignItems: 'center',
   },
-  cardMain: {
-    flex: 1,
-    padding: 16,
+  clearAllText: { fontSize: 15, fontWeight: '700', color: theme.colors.textSecondary },
+  applyBtn: {
+    flex: 2, paddingVertical: 14, borderRadius: 12,
+    backgroundColor: theme.colors.primary, alignItems: 'center',
   },
-  cardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 12,
-  },
-  candidateName: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: theme.colors.text,
-  },
-  nameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  statusTag: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  statusTagText: {
-    color: '#fff',
-    fontSize: 9,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-  },
-  candidateInfo: {
-    fontSize: 12,
-    color: theme.colors.textSecondary,
-    marginTop: 2,
-  },
-  scoreBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  scoreText: {
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  cardFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  classificationTag: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  classificationText: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  confidenceText: {
-    fontSize: 11,
-    color: theme.colors.textSecondary,
-    fontWeight: '500',
-  },
-  statusBadgeSmall: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-  statusTextSmall: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#fff',
-  },
-  emptyContainer: {
-    alignItems: 'center',
-    marginTop: 100,
-  },
-  emptyText: {
-    fontSize: 15,
-    color: theme.colors.textSecondary,
-    marginTop: 16,
-  },
+  applyText: { fontSize: 15, fontWeight: '700', color: '#fff' },
 });

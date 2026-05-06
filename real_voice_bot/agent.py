@@ -145,7 +145,7 @@ TRANSCRIPT_TOPIC = "interview-transcript"
 
 
 class VoiceAgent(Agent):
-    def __init__(self, room: rtc.Room):
+    def __init__(self, room: rtc.Room, initial_candidate_info: dict | None = None):
         super().__init__(
             instructions="You are Priya, a warm interviewer for AI SkillFit.",
             stt=sarvam.STT(
@@ -157,11 +157,14 @@ class VoiceAgent(Agent):
             llm=None,
             tts=sarvam.TTS(
                 target_language_code="en-IN",
-                model="bulbul:v3",
-                speaker="ritu",
+                model="bulbul:v2",
+                speaker="anushka",
             ),
         )
         self.state = get_initial_state()
+        # Pre-populate candidate_info from room metadata (phone_number, trade)
+        if initial_candidate_info:
+            self.state["candidate_info"].update(initial_candidate_info)
         self.language_selected = False
         self.preferred_language_code = "en-IN"
         self.preferred_language_name = "English"
@@ -238,6 +241,8 @@ class VoiceAgent(Agent):
             self.state["messages"] = [
                 {"role": "assistant", "content": greeting}
             ]
+            # Store language in candidate_info so it gets saved with results
+            self.state["candidate_info"]["language"] = language_name
             await self.say_in_preferred_language(greeting)
             return
 
@@ -265,10 +270,36 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
     logger.info(f"Room connected: {ctx.room.name}")
-    session = AgentSession(
-        min_endpointing_delay=1.5,
-    )
-    await session.start(agent=VoiceAgent(ctx.room), room=ctx.room)
+
+    # Parse room metadata to pre-populate candidate info
+    # This ensures phone_number is saved even if the candidate says a different name
+    initial_candidate_info = {}
+    try:
+        metadata_str = ctx.room.metadata or ""
+        if metadata_str:
+            metadata = json.loads(metadata_str)
+            phone = metadata.get("phone_number", "")
+            trade = metadata.get("trade", "")
+            email = metadata.get("email", "")
+            job_id = metadata.get("job_id", "")
+            if phone:
+                initial_candidate_info["phone_number"] = phone
+                logger.info(f"[Entrypoint] Pre-populated phone_number from metadata: {phone}")
+            if trade:
+                initial_candidate_info["trade"] = trade
+                logger.info(f"[Entrypoint] Pre-populated trade from metadata: {trade}")
+            if email:
+                initial_candidate_info["email"] = email
+                logger.info(f"[Entrypoint] Pre-populated email from metadata: {email}")
+            if job_id:
+                initial_candidate_info["job_id"] = job_id
+                logger.info(f"[Entrypoint] Pre-populated job_id from metadata: {job_id}")
+    except Exception as e:
+        logger.warning(f"[Entrypoint] Could not parse room metadata: {e}")
+
+    agent = VoiceAgent(ctx.room, initial_candidate_info=initial_candidate_info)
+    session = AgentSession(min_endpointing_delay=1.5)
+    await session.start(agent=agent, room=ctx.room)
 
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, agent_name="skillfit-agent"))

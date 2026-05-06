@@ -10,9 +10,21 @@ import { AuthContext } from '../../context/AuthContext';
 
 export const InterviewIntroScreen: React.FC<any> = ({ navigation, route }) => {
   const { jobId } = route.params || {};
-  const { profile } = useContext(AuthContext);
+  const { profile, user } = useContext(AuthContext);
   const [referencePhoto, setReferencePhoto] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
+  const [jobTrade, setJobTrade] = React.useState<string | null>(null);
+
+  // If coming from a job, fetch the job's trade so the interview is relevant
+  React.useEffect(() => {
+    if (!jobId) return;
+    import('../../services/supabase/config').then(({ supabase }) => {
+      supabase.from('jobs').select('trade').eq('id', jobId).single()
+        .then(({ data }) => { if (data?.trade) setJobTrade(data.trade); });
+    });
+  }, [jobId]);
+
+  const effectiveTrade = jobTrade || profile?.trade || 'General';
+
   const instructions = [
     {
       icon: 'camera',
@@ -42,20 +54,17 @@ export const InterviewIntroScreen: React.FC<any> = ({ navigation, route }) => {
 
   const pickImage = async () => {
     try {
-      // Ask for permission
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('Permission Needed', 'We need access to your photo library to upload a reference photo.');
         return;
       }
-
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.8,
       });
-
       if (!result.canceled && result.assets[0]) {
         setReferencePhoto(result.assets[0].uri);
       }
@@ -72,14 +81,12 @@ export const InterviewIntroScreen: React.FC<any> = ({ navigation, route }) => {
         Alert.alert('Permission Needed', 'We need camera access to take a selfie.');
         return;
       }
-
       const result = await ImagePicker.launchCameraAsync({
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.8,
         cameraType: ImagePicker.CameraType.front,
       });
-
       if (!result.canceled && result.assets[0]) {
         setReferencePhoto(result.assets[0].uri);
       }
@@ -183,12 +190,13 @@ export const InterviewIntroScreen: React.FC<any> = ({ navigation, route }) => {
               Alert.alert('Photo Required', 'Please upload or take a reference photo before starting the interview.');
               return;
             }
-            navigation.navigate('Interview', { 
-              jobId, 
+            navigation.navigate('Interview', {
+              jobId,
               referencePhoto,
               candidateName: profile?.full_name ?? 'Candidate',
-              trade: profile?.trade ?? 'General',
+              trade: effectiveTrade,
               phoneNumber: profile?.phone ?? '',
+              email: user?.email ?? '',
             });
           }}
           style={styles.beginBtn}
@@ -201,184 +209,46 @@ export const InterviewIntroScreen: React.FC<any> = ({ navigation, route }) => {
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: theme.colors.background,
-  },
+  container: { flex: 1, backgroundColor: theme.colors.background },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: theme.spacing.md,
-    height: 56,
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: theme.spacing.md, height: 56,
   },
-  backBtn: {
-    width: 40,
-    paddingHorizontal: 0,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: theme.colors.text,
-    marginLeft: theme.spacing.sm,
-  },
-  content: {
-    padding: theme.spacing.lg,
-  },
+  backBtn: { width: 40, paddingHorizontal: 0 },
+  headerTitle: { fontSize: 18, fontWeight: '600', color: theme.colors.text, marginLeft: theme.spacing.sm },
+  content: { padding: theme.spacing.lg },
 
-  // Photo upload card
-  photoCard: {
-    padding: 0,
-    overflow: 'hidden',
-    marginBottom: 32,
-  },
-  photoSection: {
-    padding: 20,
-  },
-  photoSectionHeader: {
-    marginBottom: 20,
-  },
-  stepBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-    marginBottom: 12,
-  },
-  stepBadgeText: {
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 1,
-  },
-  photoTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: theme.colors.text,
-    marginBottom: 6,
-  },
-  photoSubtitle: {
-    fontSize: 14,
-    color: theme.colors.textSecondary,
-    lineHeight: 20,
-  },
+  photoCard: { padding: 0, overflow: 'hidden', marginBottom: 32 },
+  photoSection: { padding: 20 },
+  photoSectionHeader: { marginBottom: 20 },
+  stepBadge: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, marginBottom: 12 },
+  stepBadgeText: { color: '#fff', fontSize: 10, fontWeight: '800', letterSpacing: 1 },
+  photoTitle: { fontSize: 20, fontWeight: '700', color: theme.colors.text, marginBottom: 6 },
+  photoSubtitle: { fontSize: 14, color: theme.colors.textSecondary, lineHeight: 20 },
 
-  // Photo actions (take/pick)
-  photoActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-  },
-  photoOptionBtn: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 12,
-  },
-  photoOptionIcon: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  photoOptionLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: theme.colors.text,
-  },
-  dividerVertical: {
-    width: 1,
-    height: 60,
-    backgroundColor: theme.colors.border,
-  },
+  photoActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 8 },
+  photoOptionBtn: { flex: 1, alignItems: 'center', paddingVertical: 12 },
+  photoOptionIcon: { width: 64, height: 64, borderRadius: 32, justifyContent: 'center', alignItems: 'center', marginBottom: 10 },
+  photoOptionLabel: { fontSize: 14, fontWeight: '600', color: theme.colors.text },
+  dividerVertical: { width: 1, height: 60, backgroundColor: theme.colors.border },
 
-  // Photo preview
-  photoPreviewContainer: {
-    alignItems: 'center',
-  },
-  photoPreview: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    borderWidth: 3,
-    borderColor: '#22c55e',
-    marginBottom: 12,
-  },
-  photoVerified: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 8,
-  },
-  photoVerifiedText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#22c55e',
-  },
-  changePhotoBtn: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-  },
-  changePhotoText: {
-    fontSize: 13,
-    color: theme.colors.primary,
-    fontWeight: '600',
-  },
+  photoPreviewContainer: { alignItems: 'center' },
+  photoPreview: { width: 120, height: 120, borderRadius: 60, borderWidth: 3, borderColor: '#22c55e', marginBottom: 12 },
+  photoVerified: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
+  photoVerifiedText: { fontSize: 14, fontWeight: '600', color: '#22c55e' },
+  changePhotoBtn: { paddingVertical: 6, paddingHorizontal: 12 },
+  changePhotoText: { fontSize: 13, color: theme.colors.primary, fontWeight: '600' },
 
-  // Instructions
-  instructionsHeader: {
-    marginBottom: 16,
-  },
-  title: {
-    fontSize: 22,
-    fontWeight: '700',
-    color: theme.colors.text,
-    marginBottom: 6,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: theme.colors.textSecondary,
-    lineHeight: 20,
-  },
-  instructionsContainer: {
-    width: '100%',
-  },
-  instructionCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: theme.spacing.md,
-    padding: theme.spacing.md,
-  },
-  iconBox: {
-    width: 48,
-    height: 48,
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: theme.spacing.md,
-  },
-  instructionText: {
-    flex: 1,
-  },
-  instructionTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: theme.colors.text,
-    marginBottom: 4,
-  },
-  instructionDesc: {
-    fontSize: 14,
-    color: theme.colors.textSecondary,
-    lineHeight: 20,
-  },
-  footer: {
-    padding: theme.spacing.lg,
-    backgroundColor: '#fff',
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
-  },
-  beginBtn: {
-    width: '100%',
-  },
+  instructionsHeader: { marginBottom: 16 },
+  title: { fontSize: 22, fontWeight: '700', color: theme.colors.text, marginBottom: 6 },
+  subtitle: { fontSize: 14, color: theme.colors.textSecondary, lineHeight: 20 },
+  instructionsContainer: { width: '100%' },
+  instructionCard: { flexDirection: 'row', alignItems: 'center', marginBottom: theme.spacing.md, padding: theme.spacing.md },
+  iconBox: { width: 48, height: 48, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginRight: theme.spacing.md },
+  instructionText: { flex: 1 },
+  instructionTitle: { fontSize: 16, fontWeight: '700', color: theme.colors.text, marginBottom: 4 },
+  instructionDesc: { fontSize: 14, color: theme.colors.textSecondary, lineHeight: 20 },
+
+  footer: { padding: theme.spacing.lg, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: theme.colors.border },
+  beginBtn: { width: '100%' },
 });

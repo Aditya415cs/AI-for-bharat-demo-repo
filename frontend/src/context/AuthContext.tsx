@@ -112,6 +112,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         .from('profiles')
         .upsert({
           ...newProfile,
+          email: user.email, // always ensure email is saved
           updated_at: new Date(),
         });
 

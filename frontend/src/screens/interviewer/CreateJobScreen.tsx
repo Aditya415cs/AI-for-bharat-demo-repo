@@ -63,40 +63,38 @@ export const CreateJobScreen = ({ navigation }: any) => {
 
     setLoading(true);
     try {
-      // 1. Check if company exists
-      let { data: companies } = await supabase
-        .from('companies')
-        .select('id')
-        .eq('created_by', user?.id)
-        .limit(1);
-      
-      let companyId = companies?.[0]?.id;
+      // 1. Check if company exists (may return empty if RLS blocks it — that's OK)
+      let companyId: string | undefined;
+      try {
+        const { data: companies } = await supabase
+          .from('companies')
+          .select('id')
+          .eq('created_by', user?.id)
+          .limit(1);
+        companyId = companies?.[0]?.id;
+      } catch {
+        // RLS may block the read — will create a new company below
+        companyId = undefined;
+      }
 
-      // 2. Create or Update Company
+      // 2. Create or update company
       if (!companyId) {
         const { data: newCompany, error: compError } = await supabase
           .from('companies')
           .insert({
             company_name: formData.companyName,
             description: formData.companyDesc,
-            created_by: user?.id
+            created_by: user?.id,
           })
-          .select()
+          .select('id')
           .single();
-        
         if (compError) throw compError;
         companyId = newCompany.id;
       } else {
-        // Update existing company info
-        const { error: updateError } = await supabase
+        await supabase
           .from('companies')
-          .update({
-            company_name: formData.companyName,
-            description: formData.companyDesc
-          })
+          .update({ company_name: formData.companyName, description: formData.companyDesc })
           .eq('id', companyId);
-        
-        if (updateError) throw updateError;
       }
 
       const { error } = await supabase.from('jobs').insert({
@@ -106,16 +104,16 @@ export const CreateJobScreen = ({ navigation }: any) => {
         trade: formData.trade,
         experience_required: formData.experience,
         location: formData.location,
-        skills_required: formData.skills.split(',').map(s => s.trim()),
-        openings: parseInt(formData.openings),
+        skills_required: formData.skills.split(',').map((s: string) => s.trim()).filter(Boolean),
+        openings: parseInt(formData.openings) || 1,
         status: 'open',
-        created_by: user?.id
+        created_by: user?.id,
       });
 
       if (error) throw error;
 
       Alert.alert('Success', 'Job posted successfully!', [
-        { text: 'OK', onPress: () => navigation.goBack() }
+        { text: 'OK', onPress: () => navigation.goBack() },
       ]);
     } catch (err: any) {
       console.error('Error creating job:', err);

@@ -16,15 +16,15 @@ export const RoleSelectionScreen = () => {
   const roles = [
     {
       id: 'candidate',
-      title: 'Candidate',
-      desc: 'Take interviews and get job recommendations',
+      title: 'Job Seeker',
+      desc: 'Take AI interviews and get matched to jobs',
       icon: 'person',
       color: theme.colors.primary,
     },
     {
       id: 'employer',
-      title: 'Interviewer',
-      desc: 'Post jobs and evaluate candidates',
+      title: 'Employer / Interviewer',
+      desc: 'Post jobs and review candidate assessments',
       icon: 'business',
       color: theme.colors.secondary,
     },

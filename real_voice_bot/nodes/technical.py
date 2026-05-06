@@ -306,11 +306,75 @@ Just the spoken response, nothing else."""
     }
 
 
+def _generate_feedback(
+    scores: list,
+    weak_topics: list,
+    questions: list,
+    candidate_info: dict,
+    avg: float,
+) -> dict:
+    """
+    Generates structured feedback: strengths and improvements.
+    Uses scored questions to identify strong and weak areas.
+    """
+    feedback_llm = get_llm(temperature=0.3, max_tokens=400)
+
+    # Build a summary of per-topic performance
+    topic_scores: dict[str, list] = {}
+    for i, q in enumerate(questions):
+        topic = q.get("topic", "General")
+        if i < len(scores):
+            topic_scores.setdefault(topic, []).append(scores[i])
+
+    topic_avg = {t: round(sum(s) / len(s), 1) for t, s in topic_scores.items()}
+    strong_topics = [t for t, a in topic_avg.items() if a >= 7.0]
+    improvement_topics = weak_topics  # already computed
+
+    feedback_prompt = f"""You are an expert assessor reviewing a voice interview for a skilled trade candidate.
+
+Candidate: {candidate_info.get('name', '')}
+Trade: {candidate_info.get('trade', '')}
+Average score: {avg}/10
+Strong topics: {', '.join(strong_topics) if strong_topics else 'None identified'}
+Topics needing improvement: {', '.join(improvement_topics) if improvement_topics else 'None'}
+
+Generate a JSON object with exactly this structure:
+{{
+  "strengths": ["<strength 1>", "<strength 2>", "<strength 3>"],
+  "improvements": ["<improvement 1>", "<improvement 2>"]
+}}
+
+Rules:
+- Strengths should be specific, positive observations (e.g. "Strong understanding of electrical safety")
+- Improvements should be constructive and actionable (e.g. "Review troubleshooting procedures for circuit faults")
+- If no strong topics, base strengths on communication or effort shown
+- Keep each item under 10 words
+- Return ONLY the JSON object, no markdown"""
+
+    try:
+        result = feedback_llm.invoke(feedback_prompt)
+        clean = re.sub(r"```json|```", "", result.content).strip()
+        feedback = json.loads(clean)
+        # Validate structure
+        if "strengths" not in feedback or "improvements" not in feedback:
+            raise ValueError("Missing keys")
+        return feedback
+    except Exception as e:
+        logger.warning(f"[Close] Feedback generation failed: {e}, using defaults")
+        return {
+            "strengths": [f"Completed the {candidate_info.get('trade', 'trade')} assessment"],
+            "improvements": [f"Review {t}" for t in improvement_topics[:2]] or ["Continue practising trade skills"],
+        }
+
+
 def close_interview_node(state: InterviewState) -> InterviewState:
     scores = state["scores"]
     avg = round(sum(scores) / len(scores), 1) if scores else 0
     weak_topics = list(set(state["weak_topics"]))
     candidate_info = state["candidate_info"]
+    questions = state.get("questions", [])
+
+    from database import check_integrity_flag
 
     if avg >= 7.5:
         fitment = "Job-Ready"
@@ -321,9 +385,20 @@ def close_interview_node(state: InterviewState) -> InterviewState:
     else:
         fitment = "Requires Significant Upskilling"
 
+    # Override with Manual Verification if integrity is suspicious
+    if check_integrity_flag(scores, avg):
+        fitment = "Requires Manual Verification"
+
     logger.info(f"[Close] Candidate: {candidate_info} | Avg: {avg} | Fitment: {fitment} | Weak: {weak_topics}")
 
-    # ── Persist results to SQLite ──
+    # ── Generate structured feedback ──
+    feedback = _generate_feedback(scores, weak_topics, questions, candidate_info, avg)
+    logger.info(f"[Close] Feedback generated: {feedback}")
+
+    # ── Build transcript from messages ──
+    transcript = state.get("messages", [])
+
+    # ── Persist results to SQLite + Supabase ──
     try:
         record_id = save_result(
             candidate_name=candidate_info.get("name", "Unknown"),
@@ -333,12 +408,18 @@ def close_interview_node(state: InterviewState) -> InterviewState:
             weak_topics=weak_topics,
             fitment=fitment,
             average_score=avg,
+            language=candidate_info.get("language", "English"),
+            district=candidate_info.get("district"),
+            feedback=feedback,
+            transcript=transcript,
+            email=candidate_info.get("email", ""),
+            job_id=candidate_info.get("job_id") or None,
         )
-        logger.info(f"[Close] Results saved to DB — record ID: {record_id}")
+        logger.info(f"[Close] Results saved — record ID: {record_id}")
     except Exception as e:
-        logger.error(f"[Close] Failed to save results to DB: {e}")
+        logger.error(f"[Close] Failed to save results: {e}")
 
-    # Generate a warm, personalized closing
+    # ── Generate warm closing message ──
     close_llm = get_llm(temperature=0.7, max_tokens=200)
 
     weak_str = ""
