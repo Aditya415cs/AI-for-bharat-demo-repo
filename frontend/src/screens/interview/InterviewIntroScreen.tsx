@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useContext } from 'react';
 import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -6,12 +6,13 @@ import * as ImagePicker from 'expo-image-picker';
 import { theme } from '../../theme';
 import { AppButton } from '../../components/AppButton';
 import { AppCard } from '../../components/AppCard';
+import { AuthContext } from '../../context/AuthContext';
 
 export const InterviewIntroScreen: React.FC<any> = ({ navigation, route }) => {
   const { jobId } = route.params || {};
+  const { profile } = useContext(AuthContext);
   const [referencePhoto, setReferencePhoto] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-
   const instructions = [
     {
       icon: 'camera',
@@ -86,14 +87,6 @@ export const InterviewIntroScreen: React.FC<any> = ({ navigation, route }) => {
       console.error('Camera error:', err);
       Alert.alert('Error', 'Failed to take photo. Please try again.');
     }
-  };
-
-  const handleBeginInterview = () => {
-    if (!referencePhoto) {
-      Alert.alert('Photo Required', 'Please upload or take a reference photo before starting the interview.');
-      return;
-    }
-    navigation.navigate('Interview', { jobId, referencePhoto });
   };
 
   return (
@@ -185,7 +178,19 @@ export const InterviewIntroScreen: React.FC<any> = ({ navigation, route }) => {
       <View style={styles.footer}>
         <AppButton
           title={referencePhoto ? "Begin Interview" : "Upload Photo First"}
-          onPress={handleBeginInterview}
+          onPress={() => {
+            if (!referencePhoto) {
+              Alert.alert('Photo Required', 'Please upload or take a reference photo before starting the interview.');
+              return;
+            }
+            navigation.navigate('Interview', { 
+              jobId, 
+              referencePhoto,
+              candidateName: profile?.full_name ?? 'Candidate',
+              trade: profile?.trade ?? 'General',
+              phoneNumber: profile?.phone ?? '',
+            });
+          }}
           style={styles.beginBtn}
           disabled={!referencePhoto}
           icon={referencePhoto ? <Ionicons name="arrow-forward" size={20} color="#fff" /> : undefined}

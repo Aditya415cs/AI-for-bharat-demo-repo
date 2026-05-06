@@ -26,6 +26,7 @@ import { RoleSelectionScreen } from '../screens/auth/RoleSelectionScreen';
 import { InterviewerNavigator } from './InterviewerNavigator';
 import { JobBrowsingScreen } from '../screens/jobs/JobBrowsingScreen';
 import { JobDetailScreen } from '../screens/jobs/JobDetailScreen';
+import { HelpScreen } from '../screens/home/HelpScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
@@ -93,7 +94,6 @@ const MainNavigator = () => (
     <MainStack.Screen name="Interview" component={InterviewScreen} />
     <MainStack.Screen name="Processing" component={ProcessingScreen} />
     <MainStack.Screen name="Result" component={ResultScreen} />
-    <MainStack.Screen name="EditProfile" component={EditProfileScreen} />
     <MainStack.Screen name="JobDetail" component={JobDetailScreen} />
   </MainStack.Navigator>
 );
@@ -109,22 +109,48 @@ export const AppNavigator = () => {
     );
   }
 
+  if (!language) {
+    return (
+      <NavigationContainer>
+        <Stack.Navigator screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="LanguageSelection" component={LanguageSelectionScreen} />
+        </Stack.Navigator>
+      </NavigationContainer>
+    );
+  }
+
+  if (!user) {
+    return (
+      <NavigationContainer>
+        <Stack.Navigator screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="Auth" component={AuthNavigator} />
+        </Stack.Navigator>
+      </NavigationContainer>
+    );
+  }
+
+  if (!profile?.role) {
+    return (
+      <NavigationContainer>
+        <Stack.Navigator screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="RoleSelection" component={RoleSelectionScreen} />
+        </Stack.Navigator>
+      </NavigationContainer>
+    );
+  }
+
   return (
     <NavigationContainer>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
-        {!language ? (
-          <Stack.Screen name="LanguageSelection" component={LanguageSelectionScreen} />
-        ) : !user ? (
-          <Stack.Screen name="Auth" component={AuthNavigator} />
-        ) : !profile?.role ? (
-          <Stack.Screen name="RoleSelection" component={RoleSelectionScreen} />
-        ) : profile.role === 'employer' || profile.role === 'admin' ? (
+        {profile.role === 'employer' || profile.role === 'admin' ? (
           <Stack.Screen name="InterviewerMain" component={InterviewerNavigator} />
         ) : !profile?.onboarding_completed ? (
           <Stack.Screen name="Onboarding" component={OnboardingScreen} />
         ) : (
           <Stack.Screen name="Main" component={MainNavigator} />
         )}
+        <Stack.Screen name="EditProfile" component={EditProfileScreen} />
+        <Stack.Screen name="Help" component={HelpScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

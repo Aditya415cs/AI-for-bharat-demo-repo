@@ -1,28 +1,50 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, TextInput, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../../theme';
 import { supabase } from '../../services/supabase/config';
 import { AppCard } from '../../components/AppCard';
+import { AuthContext } from '../../context/AuthContext';
 
 export const InterviewerApplicantsScreen = ({ route, navigation }: any) => {
+  const { user } = useContext(AuthContext);
   const { jobId } = route.params || {};
   const [applicants, setApplicants] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all'); // all, pending, shortlisted, rejected
   
   useEffect(() => {
-    fetchApplicants();
+    if (user) fetchApplicants();
     const unsubscribe = navigation.addListener('focus', () => {
-      fetchApplicants();
+      if (user) fetchApplicants();
     });
     return unsubscribe;
-  }, [navigation, jobId]);
+  }, [navigation, jobId, user]);
 
   const fetchApplicants = async () => {
+    if (!user) return;
     setLoading(true);
     try {
+      // If no specific jobId is provided, we first need to find all jobs owned by this interviewer
+      let targetJobIds = jobId ? [jobId] : [];
+      
+      if (!jobId) {
+        const { data: myJobs } = await supabase
+          .from('jobs')
+          .select('id')
+          .eq('created_by', user.id);
+        
+        if (myJobs && myJobs.length > 0) {
+          targetJobIds = myJobs.map(j => j.id);
+        } else {
+          // No jobs owned, so no applicants to show
+          setApplicants([]);
+          setLoading(false);
+          return;
+        }
+      }
+
       let query = supabase
         .from('applications')
         .select(`
@@ -34,20 +56,17 @@ export const InterviewerApplicantsScreen = ({ route, navigation }: any) => {
             full_name, 
             trade, 
             district,
-            interviews (score, classification, confidence_score, job_id)
+            interviews (average_score, classification, confidence_score, job_id)
           )
-        `);
-
-      if (jobId) {
-        query = query.eq('job_id', jobId);
-      }
+        `)
+        .in('job_id', targetJobIds);
 
       const { data, error } = await query;
 
       if (error) throw error;
       
       const transformed = (data || []).map(app => {
-        const jobInterview = (app.profiles as any)?.interviews?.find((i: any) => i.job_id === jobId) || 
+        const jobInterview = (app.profiles as any)?.interviews?.find((i: any) => i.job_id === app.job_id) || 
                             (app.profiles as any)?.interviews?.[0];
 
         // Map 'applied' to 'pending' for consistency if needed
@@ -56,10 +75,11 @@ export const InterviewerApplicantsScreen = ({ route, navigation }: any) => {
         return {
           id: app.id,
           userId: app.user_id,
+          jobId: app.job_id,
           name: (app.profiles as any)?.full_name || 'Unknown',
           trade: (app.profiles as any)?.trade || 'N/A',
           district: (app.profiles as any)?.district || 'N/A',
-          score: jobInterview?.score || 0,
+          score: Math.round(Number(jobInterview?.average_score || 0)),
           classification: jobInterview?.classification || 'Pending',
           confidence: jobInterview?.confidence_score || 0,
           status: normalizedStatus
@@ -87,7 +107,7 @@ export const InterviewerApplicantsScreen = ({ route, navigation }: any) => {
   const renderApplicantItem = ({ item, index }: { item: any, index: number }) => (
     <AppCard 
       style={styles.applicantCard}
-      onPress={() => navigation.navigate('CandidateDetail', { candidateId: item.userId, jobId })}
+      onPress={() => navigation.navigate('CandidateDetail', { candidateId: item.userId, jobId: item.jobId })}
     >
       <View style={styles.rankContainer}>
         <Text style={[styles.rankText, index < 3 && styles.topRank]}>#{index + 1}</Text>

@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useContext } from 'react';
 import { View, Text, StyleSheet, KeyboardAvoidingView, Platform, ScrollView, TouchableOpacity } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { AuthStackParamList } from '../../navigation/types';
 import { Input } from '../../components/Input';
 import { Button } from '../../components/Button';
 import { registerUser } from '../../services/supabase/auth';
+import { AuthContext } from '../../context/AuthContext';
 
 type SignUpScreenNavigationProp = NativeStackNavigationProp<AuthStackParamList, 'SignUp'>;
 
@@ -13,6 +14,7 @@ interface Props {
 }
 
 export const SignUpScreen: React.FC<Props> = ({ navigation }) => {
+  const { t } = useContext(AuthContext);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -24,15 +26,15 @@ export const SignUpScreen: React.FC<Props> = ({ navigation }) => {
 
   const validateForm = () => {
     const errors: Record<string, string> = {};
-    if (!name) errors.name = 'Name is required';
+    if (!name) errors.name = t('filling_fields');
     if (!email) {
-      errors.email = 'Email is required';
+      errors.email = t('filling_fields');
     } else if (!/\S+@\S+\.\S+/.test(email)) {
       errors.email = 'Email is invalid';
     }
     
     if (!password) {
-      errors.password = 'Password is required';
+      errors.password = t('filling_fields');
     } else if (password.length < 8) {
       errors.password = 'Password must be at least 8 characters';
     }
@@ -66,23 +68,23 @@ export const SignUpScreen: React.FC<Props> = ({ navigation }) => {
     >
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
-          <Text style={styles.title}>Create Account</Text>
-          <Text style={styles.subtitle}>Sign up to get started with AI Tracker</Text>
+          <Text style={styles.title}>{t('create_account')}</Text>
+          <Text style={styles.subtitle}>{t('join_skillfit')}</Text>
         </View>
 
         {error ? <Text style={styles.globalError}>{error}</Text> : null}
 
         <Input
-          label="Full Name"
-          placeholder="Enter your name"
+          label={t('full_name_label')}
+          placeholder={t('enter_full_name')}
           value={name}
           onChangeText={setName}
           error={validationErrors.name}
         />
 
         <Input
-          label="Email"
-          placeholder="Enter your email"
+          label={t('email_label')}
+          placeholder={t('enter_email')}
           value={email}
           onChangeText={setEmail}
           keyboardType="email-address"
@@ -91,8 +93,8 @@ export const SignUpScreen: React.FC<Props> = ({ navigation }) => {
         />
 
         <Input
-          label="Password"
-          placeholder="Create a strong password"
+          label={t('password_label')}
+          placeholder={t('enter_password')}
           value={password}
           onChangeText={setPassword}
           secureTextEntry
@@ -100,8 +102,8 @@ export const SignUpScreen: React.FC<Props> = ({ navigation }) => {
         />
 
         <Input
-          label="Confirm Password"
-          placeholder="Confirm your password"
+          label={t('password_label')}
+          placeholder={t('enter_password')}
           value={confirmPassword}
           onChangeText={setConfirmPassword}
           secureTextEntry
@@ -110,16 +112,16 @@ export const SignUpScreen: React.FC<Props> = ({ navigation }) => {
 
         <View style={styles.buttonContainer}>
           <Button 
-            title="Sign Up" 
+            title={t('signup_btn')} 
             onPress={handleSignUp} 
             loading={loading} 
           />
         </View>
 
         <View style={styles.footer}>
-          <Text style={styles.footerText}>Already have an account? </Text>
+          <Text style={styles.footerText}>{t('have_account')} </Text>
           <TouchableOpacity onPress={() => navigation.navigate('Login')}>
-            <Text style={styles.footerLink}>Login</Text>
+            <Text style={styles.footerLink}>{t('login_link')}</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>

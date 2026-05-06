@@ -43,7 +43,7 @@ export const HistoryScreen = ({ navigation }: any) => {
       // 2. Fetch interviews for this user
       const { data: interviews, error: intError } = await supabase
         .from('interviews')
-        .select('score, classification, job_id')
+        .select('average_score, classification, job_id')
         .eq('user_id', user.id);
       
       if (intError) throw intError;
@@ -96,7 +96,7 @@ export const HistoryScreen = ({ navigation }: any) => {
         
         {item.interviews?.[0] && (
           <View style={styles.scoreBadge}>
-            <Text style={styles.scoreText}>Score: {item.interviews[0].score}%</Text>
+            <Text style={styles.scoreText}>Score: {Math.round(Number(item.interviews[0].average_score || 0))}%</Text>
           </View>
         )}
       </View>

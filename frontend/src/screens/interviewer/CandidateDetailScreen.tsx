@@ -54,7 +54,7 @@ export const InterviewerCandidateDetailScreen = ({ route, navigation }: any) => 
   const updateStatus = async (status: string) => {
     // Optimistic Update
     const oldStatus = candidate.status;
-    setCandidate(prev => ({ ...prev, status }));
+    setCandidate((prev: any) => ({ ...prev, status }));
     
     setUpdating(true);
     try {
@@ -70,7 +70,7 @@ export const InterviewerCandidateDetailScreen = ({ route, navigation }: any) => 
     } catch (err) {
       console.error('Error updating status:', err);
       // Rollback on error
-      setCandidate(prev => ({ ...prev, status: oldStatus }));
+      setCandidate((prev: any) => ({ ...prev, status: oldStatus }));
       Alert.alert('Error', 'Failed to update status.');
     } finally {
       setUpdating(false);
@@ -163,7 +163,7 @@ export const InterviewerCandidateDetailScreen = ({ route, navigation }: any) => 
           <AppCard style={styles.scoreCard}>
             <Text style={styles.scoreLabel}>Interview Score</Text>
             <Text style={[styles.scoreValue, { color: theme.colors.primary }]}>
-              {candidate.interview?.score || 0}%
+              {Math.round(Number(candidate.interview?.average_score || 0))}%
             </Text>
           </AppCard>
           <AppCard style={styles.scoreCard}>

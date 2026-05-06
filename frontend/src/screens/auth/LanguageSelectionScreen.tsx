@@ -40,8 +40,8 @@ export const LanguageSelectionScreen: React.FC<any> = ({ navigation }) => {
           >
             <AppCard 
               style={[
-                styles.card, 
-                selected === item.id && styles.selectedCard
+                styles.card,
+                ...(selected === item.id ? [styles.selectedCard] : [])
               ]}
               variant={selected === item.id ? 'elevated' : 'outlined'}
             >
