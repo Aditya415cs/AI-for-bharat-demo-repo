@@ -5,9 +5,11 @@ SQLite is no longer used.
 """
 
 import os
+import asyncio
 import logging
 from uuid import uuid4
 
+import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,11 +27,39 @@ LIVEKIT_URL = os.getenv("LIVEKIT_URL", "wss://voice-bot-szlvcdo4.livekit.cloud")
 LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY")
 LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET")
 
+# Self-ping URL — set RENDER_EXTERNAL_URL in Render's environment variables
+# e.g. https://your-service-name.onrender.com
+# If not set, the keep-alive task is skipped silently.
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
+KEEP_ALIVE_INTERVAL = 10 * 60  # 10 minutes
+
+
+async def _keep_alive():
+    """Pings /health every 10 minutes so Render's free tier doesn't spin down."""
+    if not RENDER_EXTERNAL_URL:
+        logger.info("[KeepAlive] RENDER_EXTERNAL_URL not set — skipping keep-alive task.")
+        return
+    url = f"{RENDER_EXTERNAL_URL}/health"
+    logger.info(f"[KeepAlive] Starting — will ping {url} every {KEEP_ALIVE_INTERVAL // 60} min.")
+    async with httpx.AsyncClient(timeout=10) as client:
+        while True:
+            await asyncio.sleep(KEEP_ALIVE_INTERVAL)
+            try:
+                resp = await client.get(url)
+                logger.info(f"[KeepAlive] Ping → {resp.status_code}")
+            except Exception as exc:
+                logger.warning(f"[KeepAlive] Ping failed: {exc}")
+
+
 app = FastAPI(
     title="AI SkillFit Backend",
     description="Government skill assessment platform — Supabase-backed",
     version="2.0.0",
 )
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(_keep_alive())
 
 app.add_middleware(
     CORSMiddleware,
