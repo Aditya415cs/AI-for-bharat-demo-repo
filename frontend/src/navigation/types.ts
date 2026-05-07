@@ -21,6 +21,8 @@ export type MainStackParamList = {
   InterviewIntro: { jobId?: string } | undefined;
   Interview: { 
     jobId?: string;
+    userId?: string;
+    referencePhoto?: string;
     candidateName: string;
     trade: string;
     phoneNumber: string;

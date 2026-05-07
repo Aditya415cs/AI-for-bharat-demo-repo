@@ -9,6 +9,7 @@ import { theme } from '../../theme';
 import { AuthContext } from '../../context/AuthContext';
 import { AppCard } from '../../components/AppCard';
 import { supabase } from '../../services/supabase/config';
+import { getResults } from '../../services/interviewService';
 
 // ── Fitment helpers ───────────────────────────────────────────────────────────
 const FITMENT_COLOR: Record<string, string> = {
@@ -124,11 +125,7 @@ export const InterviewerDashboardScreen = ({ navigation }: any) => {
         appCount = count || 0;
       }
 
-      // Interviews — admin sees all, employer sees interviews of their applicants
-      const ivQuery = supabase
-        .from('interviews')
-        .select('id, candidate_name, trade, language, district, category, fitment, average_score, confidence_score, integrity_flag, created_at')
-        .order('created_at', { ascending: false });
+      let ivList: any[] = await getResults();
 
       if (!isAdmin) {
         if (jobIds.length > 0) {
@@ -137,7 +134,7 @@ export const InterviewerDashboardScreen = ({ navigation }: any) => {
             .from('applications').select('user_id').in('job_id', jobIds);
           const applicantIds = [...new Set((apps || []).map((a: any) => a.user_id).filter(Boolean))];
           if (applicantIds.length > 0) {
-            ivQuery.in('user_id', applicantIds);
+            ivList = ivList.filter((iv: any) => applicantIds.includes(iv.user_id) || jobIds.includes(iv.job_id));
           } else {
             // No applicants — empty interviews
             setStats({ totalInterviews: 0, jobReady: 0, requiresTraining: 0, flagged: 0, totalJobs: jobsCount || 0, totalApplicants: appCount, avgScore: 0 });
@@ -155,9 +152,6 @@ export const InterviewerDashboardScreen = ({ navigation }: any) => {
           return;
         }
       }
-
-      const { data: interviews } = await ivQuery;
-      const ivList = interviews || [];
 
       // Stats
       const jobReadyCount = ivList.filter((i: any) => i.fitment === 'Job-Ready').length;

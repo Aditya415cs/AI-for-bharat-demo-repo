@@ -16,4 +16,7 @@ class InterviewState(TypedDict):
     followup_count: int         
     # I/O between graph and agent
     last_user_input: str         
-    last_response: str    
+    last_response: str
+    # Persistence
+    result_saved: Optional[bool]
+    saved_result_id: Optional[str]

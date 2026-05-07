@@ -18,6 +18,7 @@ from nodes.technical import (
     technical_ask_node,
     technical_score_node,
     close_interview_node,
+    persist_interview_result,
 )
 from nodes.utils import get_llm
 from state import InterviewState
@@ -81,6 +82,8 @@ def get_initial_state() -> InterviewState:
         "followup_count": 0,
         "last_user_input": "",
         "last_response": "",
+        "result_saved": False,
+        "saved_result_id": None,
     }
 
 
@@ -212,6 +215,13 @@ class VoiceAgent(Agent):
         await self.publish_transcript("assistant", greeting)
         await self.session.say(greeting)
 
+    async def on_exit(self):
+        if self.state.get("result_saved"):
+            return
+        if self.state.get("scores"):
+            logger.info("[Agent exit] Attempting to save partial interview result before shutdown.")
+            self.state = persist_interview_result(self.state, partial=True)
+
     async def on_user_turn_completed(self, turn_ctx, new_message):
         user_text = new_message.text_content
         if not user_text or not user_text.strip():
@@ -282,6 +292,11 @@ async def entrypoint(ctx: JobContext):
             trade = metadata.get("trade", "")
             email = metadata.get("email", "")
             job_id = metadata.get("job_id", "")
+            user_id = metadata.get("user_id", "")
+            livekit_room = metadata.get("livekit_room", ctx.room.name)
+            if user_id:
+                initial_candidate_info["user_id"] = user_id
+                logger.info(f"[Entrypoint] Pre-populated user_id from metadata: {user_id}")
             if phone:
                 initial_candidate_info["phone_number"] = phone
                 logger.info(f"[Entrypoint] Pre-populated phone_number from metadata: {phone}")
@@ -294,6 +309,8 @@ async def entrypoint(ctx: JobContext):
             if job_id:
                 initial_candidate_info["job_id"] = job_id
                 logger.info(f"[Entrypoint] Pre-populated job_id from metadata: {job_id}")
+            if livekit_room:
+                initial_candidate_info["livekit_room"] = livekit_room
     except Exception as e:
         logger.warning(f"[Entrypoint] Could not parse room metadata: {e}")
 

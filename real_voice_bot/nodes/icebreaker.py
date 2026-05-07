@@ -87,6 +87,14 @@ Conversation:
     except Exception:
         candidate_info = {"name": "unknown", "trade": "unknown", "years_of_experience": "unknown"}
 
+    # Keep metadata injected from the LiveKit room, such as phone/email/job_id.
+    # The LLM extraction only knows the spoken icebreaker history and should not
+    # erase identifiers needed for saving and result lookup.
+    candidate_info = {
+        **state.get("candidate_info", {}),
+        **candidate_info,
+    }
+
     logger.info(f"[ExtractInfo] {candidate_info}")
 
     return {

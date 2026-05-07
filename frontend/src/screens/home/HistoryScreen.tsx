@@ -238,87 +238,25 @@ const cardStyles = StyleSheet.create({
 export const HistoryScreen = ({ navigation }: any) => {
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const { user } = useContext(AuthContext);
+  const { profile, user } = useContext(AuthContext);
 
   const fetchHistory = useCallback(async () => {
     if (!user) return;
     setLoading(true);
     try {
-      // Strategy 1: fetch by user_id (works when RLS policy is set up correctly)
-      let interviews: any[] = [];
-      const { data: byUserId, error: e1 } = await supabase
+      // Fix 1.1: Query interviews table directly in Supabase so admin_status is always populated
+      const { data: interviews, error: ivError } = await supabase
         .from('interviews')
-        .select('id, candidate_name, phone_number, trade, language, district, category, fitment, average_score, confidence_score, integrity_flag, scores, weak_topics, feedback, job_id, created_at')
+        .select('*')
         .eq('user_id', user.id)
         .order('created_at', { ascending: false });
 
-      if (!e1 && byUserId && byUserId.length > 0) {
-        interviews = byUserId;
-      } else {
-        // Strategy 2: fetch by email match via profiles (fallback when user_id RLS blocks)
-        // Get the user's email from auth
-        const { data: { user: authUser } } = await supabase.auth.getUser();
-        const email = authUser?.email;
+      if (ivError) throw ivError;
 
-        if (email) {
-          // Find profile to get phone number
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('phone, full_name')
-            .eq('id', user.id)
-            .maybeSingle();
-
-          // Try fetching by phone number (voice bot always saves this)
-          if (profile?.phone) {
-            const { data: byPhone } = await supabase
-              .from('interviews')
-              .select('id, candidate_name, phone_number, trade, language, district, category, fitment, average_score, confidence_score, integrity_flag, scores, weak_topics, feedback, job_id, created_at')
-              .eq('phone_number', profile.phone)
-              .order('created_at', { ascending: false });
-            if (byPhone && byPhone.length > 0) {
-              interviews = byPhone;
-            }
-          }
-
-          // If still nothing, try by candidate_name
-          if (interviews.length === 0 && profile?.full_name) {
-            const { data: byName } = await supabase
-              .from('interviews')
-              .select('id, candidate_name, phone_number, trade, language, district, category, fitment, average_score, confidence_score, integrity_flag, scores, weak_topics, feedback, job_id, created_at')
-              .ilike('candidate_name', profile.full_name)
-              .order('created_at', { ascending: false });
-            if (byName && byName.length > 0) {
-              interviews = byName;
-            }
-          }
-        }
-
-        if (e1) {
-          console.warn('[History] user_id query failed:', e1.message, '— trying fallback strategies');
-        }
-      }
-
-      // Try to get admin_status (graceful if column doesn't exist yet)
-      const adminStatusMap: Record<string, string> = {};
-      if (interviews.length > 0) {
-        try {
-          const ids = interviews.map(iv => iv.id);
-          const { data: statusRows } = await supabase
-            .from('interviews')
-            .select('id, admin_status')
-            .in('id', ids);
-          (statusRows || []).forEach((r: any) => {
-            if (r.admin_status) adminStatusMap[r.id] = r.admin_status;
-          });
-        } catch {
-          // admin_status column doesn't exist yet — ignore
-        }
-      }
-
-      // Fetch applications to get job info
+      // Fix 1.2: Include updated_at and join companies(company_name, logo_url)
       const { data: apps } = await supabase
         .from('applications')
-        .select('job_id, status, jobs(id, title, companies(company_name))')
+        .select('job_id, status, updated_at, jobs(id, title, companies(company_name, logo_url))')
         .eq('user_id', user.id);
 
       const appMap: Record<string, any> = {};
@@ -326,13 +264,13 @@ export const HistoryScreen = ({ navigation }: any) => {
         if (a.job_id) appMap[a.job_id] = a;
       });
 
-      const merged = interviews.map((iv: any) => {
+      const merged = (interviews || []).map((iv: any) => {
         const app = iv.job_id ? appMap[iv.job_id] : null;
         return {
           id: iv.id,
           created_at: iv.created_at,
           jobs: app?.jobs ?? null,
-          interview: { ...iv, admin_status: adminStatusMap[iv.id] ?? null },
+          interview: iv,
         };
       });
 

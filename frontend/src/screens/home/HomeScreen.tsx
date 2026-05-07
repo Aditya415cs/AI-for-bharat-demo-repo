@@ -17,42 +17,14 @@ export const HomeScreen: React.FC<any> = ({ navigation }) => {
   const loadStats = useCallback(async () => {
     if (!user) return;
     try {
-      // Strategy 1: by user_id
-      let data: any[] | null = null;
-      const { data: d1, error: e1 } = await supabase
+      // Fix 1.3: Query interviews table directly in Supabase so stats reflect live state
+      // including the integrity_flag column
+      const { data, error } = await supabase
         .from('interviews')
-        .select('average_score')
+        .select('average_score, integrity_flag')
         .eq('user_id', user.id);
 
-      if (!e1 && d1 && d1.length > 0) {
-        data = d1;
-      } else {
-        // Strategy 2: by phone number
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('phone, full_name')
-          .eq('id', user.id)
-          .maybeSingle();
-
-        if (profile?.phone) {
-          const { data: d2 } = await supabase
-            .from('interviews')
-            .select('average_score')
-            .eq('phone_number', profile.phone);
-          if (d2 && d2.length > 0) data = d2;
-        }
-
-        // Strategy 3: by candidate name
-        if (!data && profile?.full_name) {
-          const { data: d3 } = await supabase
-            .from('interviews')
-            .select('average_score')
-            .ilike('candidate_name', profile.full_name);
-          if (d3 && d3.length > 0) data = d3;
-        }
-
-        if (e1) console.warn('[HomeScreen] user_id stats query failed:', e1.message);
-      }
+      if (error) throw error;
 
       if (data && data.length > 0) {
         const validScores = data.filter(r => r.average_score != null);

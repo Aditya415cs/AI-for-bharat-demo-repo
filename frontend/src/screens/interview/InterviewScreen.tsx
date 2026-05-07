@@ -25,7 +25,9 @@ import { runOnJS } from 'react-native-reanimated';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { theme } from "../../theme";
 import { AppButton } from "../../components/AppButton";
-import { startInterview, InterviewResult } from "../../services/interviewService";
+import { blockCandidate, getLatestResult, ResultNotReadyError, startInterview, InterviewResult } from "../../services/interviewService";
+import { LiveOcrStatus, LiveOcrTracker } from "../../ai_modules/ocr_ai";
+import { WebFaceProctor, WebFaceStatus } from "../../ai_modules/proctoring_ai";
 
 const { width } = Dimensions.get('window');
 const isWeb = Platform.OS === 'web';
@@ -47,7 +49,7 @@ const STATUS_CONFIG: Record<VerificationStatus, FaceConfig> = {
   not_looking: { color: '#f59e0b', bgColor: 'rgba(245,158,11,0.85)', icon: 'eye-off', label: 'Look at Camera' },
 };
 
-type InterviewState = "idle" | "connecting" | "active" | "completed" | "error";
+type InterviewState = "idle" | "connecting" | "active" | "completed" | "blocked" | "error";
 type TranscriptMessage = {
   id: string;
   speaker: "assistant" | "user";
@@ -86,7 +88,7 @@ const WaveBar = ({ active, delay }: { active: boolean; delay: number }) => {
 };
 
 export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
-  const { jobId, referencePhoto, candidateName = "Candidate", trade = "General", phoneNumber = "", email = "" } = route.params || {};
+  const { jobId, userId = "", referencePhoto, candidateName = "Candidate", trade = "General", phoneNumber = "", email = "" } = route.params || {};
 
   const [interviewState, setInterviewState] = useState<InterviewState>("idle");
   const [errorMessage, setErrorMessage] = useState("");
@@ -95,20 +97,126 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
   const [fitmentResult, setFitmentResult] = useState<InterviewResult | null>(null);
   const [showEndConfirm, setShowEndConfirm] = useState(false);
   const [transcriptMessages, setTranscriptMessages] = useState<TranscriptMessage[]>([]);
+  const [liveOcrStatus, setLiveOcrStatus] = useState<LiveOcrStatus>('idle');
+  const [liveOcrText, setLiveOcrText] = useState('');
+  const [liveOcrConfidence, setLiveOcrConfidence] = useState<number | null>(null);
+  const [liveOcrError, setLiveOcrError] = useState('');
 
   // Proctoring states
   const [verificationStatus, setVerificationStatus] = useState<VerificationStatus>('scanning');
   const [showRefPhoto, setShowRefPhoto] = useState(false);
   const [facesCount, setFacesCount] = useState(0);
+  const [proctorFlagCount, setProctorFlagCount] = useState(0);
+  const [lastProctorFlag, setLastProctorFlag] = useState('');
 
   const roomRef = useRef<Room | null>(null);
   const localAudioRef = useRef<LocalAudioTrack | null>(null);
+  const liveOcrRef = useRef<LiveOcrTracker | null>(null);
+  const webFaceProctorRef = useRef<WebFaceProctor | null>(null);
+  const lastFlagStatusRef = useRef<VerificationStatus | null>(null);
+  const blockInProgressRef = useRef(false);
+  const livekitRoomRef = useRef('');
   const transcriptScrollRef = useRef<ScrollView | null>(null);
   // Track attached RemoteAudioTrack instances so we can detach on cleanup
   const remoteAudioTracksRef = useRef<RemoteAudioTrack[]>([]);
 
   useEffect(() => {
-    return () => { disconnectCleanly(); };
+    return () => {
+      liveOcrRef.current?.stop();
+      liveOcrRef.current = null;
+      webFaceProctorRef.current?.stop();
+      webFaceProctorRef.current = null;
+      disconnectCleanly();
+    };
+  }, []);
+
+  const stopWebFaceProctor = useCallback(() => {
+    const tracker = webFaceProctorRef.current;
+    webFaceProctorRef.current = null;
+    if (tracker) void tracker.stop();
+  }, []);
+
+  const noteProctorFlag = useCallback((status: VerificationStatus) => {
+    if (status === 'verified' || status === 'scanning') {
+      lastFlagStatusRef.current = null;
+      return;
+    }
+
+    lastFlagStatusRef.current = status;
+
+    const label =
+      status === 'no_face'
+        ? 'Candidate moved out of camera'
+        : status === 'multiple_faces'
+          ? 'Multiple faces detected'
+          : 'Candidate not looking at camera';
+
+    setLastProctorFlag(label);
+    setProctorFlagCount((count) => count + 1);
+  }, []);
+
+  const startWebFaceProctor = useCallback(() => {
+    if (!isWeb || webFaceProctorRef.current) return;
+
+    const tracker = new WebFaceProctor({
+      intervalMs: 1200,
+      onStatus: (status: WebFaceStatus, faceCount: number) => {
+        if (status === 'unsupported' || status === 'error') {
+          setFacesCount(0);
+          setVerificationStatus('scanning');
+          return;
+        }
+
+        setFacesCount(faceCount);
+        if (status === 'no_face') {
+          setVerificationStatus('no_face');
+          noteProctorFlag('no_face');
+        } else if (status === 'multiple_faces') {
+          setVerificationStatus('multiple_faces');
+          noteProctorFlag('multiple_faces');
+        } else if (status === 'verified') {
+          setVerificationStatus('verified');
+          noteProctorFlag('verified');
+        } else {
+          setVerificationStatus('scanning');
+        }
+      },
+    });
+
+    webFaceProctorRef.current = tracker;
+    void tracker.start();
+  }, [noteProctorFlag]);
+
+  const stopLiveOcr = useCallback(() => {
+    const tracker = liveOcrRef.current;
+    liveOcrRef.current = null;
+    setLiveOcrStatus('idle');
+    if (tracker) void tracker.stop();
+  }, []);
+
+  const startLiveOcr = useCallback(() => {
+    if (liveOcrRef.current) return;
+
+    setLiveOcrText('');
+    setLiveOcrError('');
+    setLiveOcrConfidence(null);
+
+    const tracker = new LiveOcrTracker({
+      intervalMs: 5000,
+      onUpdate: ({ status, text, confidence, error }) => {
+        setLiveOcrStatus(status);
+        setLiveOcrConfidence(confidence);
+        if (text) setLiveOcrText(text);
+        if (error) {
+          setLiveOcrError(error);
+          setLastProctorFlag('OCR scan failed during interview');
+          setProctorFlagCount((count) => count + 1);
+        }
+      },
+    });
+
+    liveOcrRef.current = tracker;
+    void tracker.start();
   }, []);
 
   /**
@@ -144,51 +252,93 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
 
   const disconnectCleanly = useCallback(async () => {
     detachAllRemoteAudio();
+    stopLiveOcr();
+    stopWebFaceProctor();
     try {
       if (localAudioRef.current) { localAudioRef.current.stop(); localAudioRef.current = null; }
       if (roomRef.current) { await roomRef.current.disconnect(); roomRef.current = null; }
     } catch {}
-  }, [detachAllRemoteAudio]);
+  }, [detachAllRemoteAudio, stopLiveOcr, stopWebFaceProctor]);
+
+  const blockAndStopInterview = useCallback(async (reason: string) => {
+    // Fix 1.13: Set the guard synchronously BEFORE any async work so React
+    // re-renders cannot trigger a second call before the first completes.
+    if (blockInProgressRef.current) return;
+    blockInProgressRef.current = true;
+
+    setShowEndConfirm(false);
+    setLastProctorFlag(reason);
+    setErrorMessage("Interview stopped because proctoring/OCR flags reached the allowed limit.");
+
+    try {
+      if (userId) {
+        await blockCandidate({
+          user_id: userId,
+          job_id: jobId || undefined,
+          livekit_room: livekitRoomRef.current || undefined,
+          reason,
+        });
+      }
+    } catch (err) {
+      console.warn('[Proctoring] Failed to save blocked candidate:', err);
+      setErrorMessage("Interview stopped after repeated proctoring/OCR flags. The block record could not be saved; please ask admin to verify.");
+    }
+
+    // Fix 1.15: Update interviews.integrity_flag = true in Supabase so the
+    // admin dashboard Flagged Cases view reflects this candidate immediately.
+    if (livekitRoomRef.current) {
+      try {
+        const { supabase } = await import('../../services/supabase/config');
+        await supabase
+          .from('interviews')
+          .update({ integrity_flag: true })
+          .eq('livekit_room', livekitRoomRef.current);
+      } catch (err) {
+        console.warn('[Proctoring] Failed to set integrity_flag on interview:', err);
+      }
+    }
+
+    // Fix 1.14: disconnectCleanly already handles null room gracefully via
+    // try/catch — state is set to "blocked" regardless of room connection state.
+    await disconnectCleanly();
+    setMicActive(false);
+    setPriyaSpeaking(false);
+    setInterviewState("blocked");
+  }, [disconnectCleanly, jobId, userId]);
 
   const interviewStartTimeRef = useRef<number>(0);
   const interviewStartISORef = useRef<string>('');
+  const fitmentFetchRef = useRef<Promise<void> | null>(null);
 
   const fetchFitment = useCallback(async () => {
-    const afterISO = interviewStartISORef.current;
+    if (fitmentFetchRef.current) {
+      return fitmentFetchRef.current;
+    }
 
-    // Query Supabase directly — avoids HTTP encoding issues with email in URL path
-    // and is more reliable than polling the backend API
-    const { supabase: sb } = await import('../../services/supabase/config');
+    const fetchPromise = (async () => {
+      const afterISO = interviewStartISORef.current;
 
-    for (let attempt = 0; attempt < 15; attempt++) {
-      try {
-        // Primary: look up by user_id (most reliable — no encoding issues)
-        const { data: { user } } = await sb.auth.getUser();
-        if (user?.id) {
-          const { data } = await sb
-            .from('interviews')
-            .select('id, candidate_name, phone_number, trade, language, district, category, fitment, average_score, confidence_score, integrity_flag, scores, weak_topics, feedback, transcript, created_at')
-            .eq('user_id', user.id)
-            .gte('created_at', afterISO)
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle();
-
-          if (data) {
-            // Normalize field name to match InterviewResult type
-            const result = { ...data, interview_date: data.created_at } as any;
-            setFitmentResult(result);
-            return;
+      for (let attempt = 0; attempt < 15; attempt++) {
+        try {
+          const result = await getLatestResult(phoneNumber, afterISO, email);
+          setFitmentResult(result);
+          return;
+        } catch (err) {
+          if (!(err instanceof ResultNotReadyError)) {
+            console.warn('[fetchFitment] Backend result lookup failed:', err);
           }
         }
-      } catch (err) {
-        console.warn('[fetchFitment] Supabase query failed:', err);
+        await new Promise(r => setTimeout(r, 3000));
       }
-      // Wait 3s between attempts — agent needs time to score and save
-      await new Promise(r => setTimeout(r, 3000));
+    })();
+
+    fitmentFetchRef.current = fetchPromise;
+    try {
+      await fetchPromise;
+    } finally {
+      fitmentFetchRef.current = null;
     }
-    // After all attempts, leave fitmentResult as null — UI shows thank-you without result
-  }, []);
+  }, [email, phoneNumber]);
 
   const appendTranscriptMessage = useCallback((message: TranscriptMessage) => {
     setTranscriptMessages((current) => {
@@ -201,6 +351,15 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
     setInterviewState("connecting");
     setErrorMessage("");
     setTranscriptMessages([]);
+    setLiveOcrText('');
+    setLiveOcrError('');
+    setLiveOcrConfidence(null);
+    setLiveOcrStatus('idle');
+    setProctorFlagCount(0);
+    setLastProctorFlag('');
+    blockInProgressRef.current = false;
+    livekitRoomRef.current = '';
+    lastFlagStatusRef.current = null;
     interviewStartTimeRef.current = Date.now();
     interviewStartISORef.current = new Date().toISOString(); // record start time for result lookup
 
@@ -227,7 +386,8 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
     // Call backend to create room + dispatch Priya
     let credentials: { token: string; url: string; room: string };
     try {
-      credentials = await startInterview({ candidate_name: candidateName, trade, phone_number: phoneNumber, email, job_id: jobId || undefined });
+      credentials = await startInterview({ user_id: userId, candidate_name: candidateName, trade, phone_number: phoneNumber, email, job_id: jobId || undefined });
+      livekitRoomRef.current = credentials.room;
     } catch (err: any) {
       setErrorMessage(err.message ?? "Failed to start interview. Please try again.");
       setInterviewState("error");
@@ -285,15 +445,21 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
       // ── Room disconnected (Priya ended session or network drop) ─────────
       room.on(RoomEvent.Disconnected, async () => {
         detachAllRemoteAudio();
+        stopLiveOcr();
         setMicActive(false);
         setPriyaSpeaking(false);
+        if (blockInProgressRef.current) return;
         setInterviewState("completed");
         await fetchFitment();
       });
 
       // ── Connection state ────────────────────────────────────────────────
       room.on(RoomEvent.ConnectionStateChanged, (state: ConnectionState) => {
-        if (state === ConnectionState.Connected) setInterviewState("active");
+        if (state === ConnectionState.Connected) {
+          setInterviewState("active");
+          startLiveOcr();
+          startWebFaceProctor();
+        }
       });
 
       await room.connect(credentials.url, credentials.token, { autoSubscribe: true });
@@ -322,16 +488,18 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
       setErrorMessage(err.message ?? "Failed to connect to the interview room. Please try again.");
       setInterviewState("error");
     }
-  }, [candidateName, trade, phoneNumber, email, disconnectCleanly, fetchFitment, attachRemoteAudioTrack, detachAllRemoteAudio, appendTranscriptMessage]);
+  }, [candidateName, trade, phoneNumber, email, jobId, userId, disconnectCleanly, fetchFitment, attachRemoteAudioTrack, detachAllRemoteAudio, appendTranscriptMessage, startLiveOcr, startWebFaceProctor, stopLiveOcr]);
 
   const confirmEndInterview = useCallback(async () => {
     setShowEndConfirm(false);
     await disconnectCleanly();
+    stopLiveOcr();
+    stopWebFaceProctor();
     setMicActive(false);
     setPriyaSpeaking(false);
     setInterviewState("completed");
     await fetchFitment();
-  }, [disconnectCleanly, fetchFitment]);
+  }, [disconnectCleanly, fetchFitment, stopLiveOcr, stopWebFaceProctor]);
 
   const handleViewResult = useCallback(() => {
     // Pass the full result object directly — no need to re-fetch
@@ -355,12 +523,22 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
     setFacesCount(faceCount);
     if (faceCount === 0) {
       setVerificationStatus('no_face');
+      noteProctorFlag('no_face');
     } else if (faceCount > 1) {
       setVerificationStatus('multiple_faces');
+      noteProctorFlag('multiple_faces');
     } else {
-      setVerificationStatus(Math.abs(yaw) > 20 ? 'not_looking' : 'verified');
+      const nextStatus = Math.abs(yaw) > 20 ? 'not_looking' : 'verified';
+      setVerificationStatus(nextStatus);
+      noteProctorFlag(nextStatus);
     }
-  }, []);
+  }, [noteProctorFlag]);
+
+  useEffect(() => {
+    if ((interviewState === "active" || interviewState === "connecting") && proctorFlagCount >= 5) {
+      void blockAndStopInterview(`Interview stopped after ${proctorFlagCount} proctoring/OCR flags.`);
+    }
+  }, [blockAndStopInterview, interviewState, proctorFlagCount]);
 
   const frameProcessor = useFrameProcessor((frame) => {
     'worklet';
@@ -381,13 +559,6 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
     if (!expoPermission?.granted) {
       requestExpoCameraPermission();
     }
-    // Web/Expo Camera fallback — keep proctoring status alive when frame processors are unavailable.
-    if (isWeb) {
-      const interval = setInterval(() => {
-        onFacesDetected(Math.random() > 0.1 ? 1 : 0, 0);
-      }, 3000);
-      return () => clearInterval(interval);
-    }
   }, [visionPermission.hasPermission, expoPermission?.granted, requestExpoCameraPermission, onFacesDetected]);
 
   const cameraPermissionGranted = isWeb
@@ -396,6 +567,13 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
   const shouldRunProctoringCamera = interviewState === "connecting" || interviewState === "active";
   const canUseVisionCamera = !isWeb && visionPermission.hasPermission && !!device;
   const canUseExpoCamera = !!expoPermission?.granted;
+
+  useEffect(() => {
+    if (isWeb && shouldRunProctoringCamera && canUseExpoCamera) {
+      startWebFaceProctor();
+      return stopWebFaceProctor;
+    }
+  }, [canUseExpoCamera, shouldRunProctoringCamera, startWebFaceProctor, stopWebFaceProctor]);
 
   // Camera permission gate
   if (!cameraPermissionGranted) {
@@ -420,6 +598,50 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
   }
 
   const statusConfig = STATUS_CONFIG[verificationStatus];
+  const completedAverageScore = fitmentResult?.average_score != null
+    ? Number(fitmentResult.average_score)
+    : null;
+  const completedScores = Array.isArray(fitmentResult?.scores)
+    ? fitmentResult.scores.map((score) => Number(score)).filter((score) => Number.isFinite(score))
+    : [];
+  const getScoreColor = (score: number) => (
+    score >= 7.5 ? '#10b981' : score >= 5 ? '#f59e0b' : '#ef4444'
+  );
+
+  const renderLiveOcrPanel = () => {
+    if (interviewState !== "active") return null;
+
+    const statusLabel =
+      liveOcrStatus === 'active'
+        ? liveOcrConfidence != null
+          ? `Scanning text - ${liveOcrConfidence}%`
+          : 'Scanning text'
+        : liveOcrStatus === 'starting'
+          ? 'Starting OCR'
+          : liveOcrStatus === 'unsupported'
+            ? 'OCR unavailable'
+            : liveOcrStatus === 'error'
+              ? 'OCR needs attention'
+              : 'OCR idle';
+
+    return (
+      <View style={styles.ocrSection}>
+        <View style={styles.ocrHeader}>
+          <Ionicons name="scan-outline" size={18} color={theme.colors.primary} />
+          <Text style={styles.ocrTitle}>Live OCR</Text>
+          <View style={[
+            styles.ocrBadge,
+            liveOcrStatus === 'active' ? styles.ocrBadgeActive : liveOcrStatus === 'error' ? styles.ocrBadgeError : null,
+          ]}>
+            <Text style={styles.ocrBadgeText}>{statusLabel}</Text>
+          </View>
+        </View>
+        <Text style={styles.ocrText}>
+          {liveOcrText || liveOcrError || 'Point a document, ID, or certificate at the camera during the interview.'}
+        </Text>
+      </View>
+    );
+  };
   const renderProctoringPanel = () => {
     if (!shouldRunProctoringCamera) return null;
 
@@ -534,6 +756,15 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
           </View>
 
           {renderProctoringPanel()}
+          {proctorFlagCount > 0 && (
+            <View style={styles.proctorFlagBox}>
+              <Ionicons name="warning" size={16} color="#92400e" />
+              <Text style={styles.proctorFlagText}>
+                {lastProctorFlag} · {proctorFlagCount} flag{proctorFlagCount === 1 ? '' : 's'}
+              </Text>
+            </View>
+          )}
+          {renderLiveOcrPanel()}
           <View style={styles.priyaSection}>
             <View style={[styles.priyaAvatar, priyaSpeaking && styles.priyaAvatarSpeaking]}>
               <Ionicons name="sparkles" size={48} color="#fff" />
@@ -611,8 +842,8 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
                 <View style={{ flexDirection: 'row', gap: 24, marginTop: 8 }}>
                   <View style={{ alignItems: 'center' }}>
                     <Text style={styles.fitmentLabel}>Score</Text>
-                    <Text style={[styles.fitmentScore, { color: fitmentResult.average_score >= 7.5 ? '#10b981' : fitmentResult.average_score >= 5 ? '#f59e0b' : '#ef4444' }]}>
-                      {fitmentResult.average_score.toFixed(1)}/10
+                    <Text style={[styles.fitmentScore, { color: getScoreColor(completedAverageScore ?? 0) }]}>
+                      {completedAverageScore != null ? completedAverageScore.toFixed(1) : '0.0'}/10
                     </Text>
                   </View>
                   {fitmentResult.confidence_score != null && (
@@ -624,6 +855,30 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
                     </View>
                   )}
                 </View>
+                {completedScores.length > 0 && (
+                  <View style={styles.completedScores}>
+                    <Text style={styles.completedScoresTitle}>Question Scores</Text>
+                    {completedScores.map((score, index) => (
+                      <View key={`${index}-${score}`} style={styles.completedScoreRow}>
+                        <Text style={styles.completedScoreLabel}>Q{index + 1}</Text>
+                        <View style={styles.completedScoreTrack}>
+                          <View
+                            style={[
+                              styles.completedScoreFill,
+                              {
+                                width: `${Math.min(100, Math.max(0, score * 10))}%`,
+                                backgroundColor: getScoreColor(score),
+                              },
+                            ]}
+                          />
+                        </View>
+                        <Text style={[styles.completedScoreValue, { color: getScoreColor(score) }]}>
+                          {score.toFixed(1)}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
               </>
             ) : (
               <View style={{ alignItems: 'center', gap: 10 }}>
@@ -637,6 +892,24 @@ export const InterviewScreen: React.FC<any> = ({ navigation, route }) => {
           {fitmentResult ? (
             <AppButton title="View Full Result" onPress={handleViewResult} style={styles.primaryBtn} />
           ) : null}
+          <AppButton title="Back to Home" variant="ghost" onPress={() => navigation.navigate("HomeTabs")} style={styles.ghostBtn} textStyle={{ color: theme.colors.textSecondary }} />
+        </View>
+      )}
+
+      {/* BLOCKED */}
+      {interviewState === "blocked" && (
+        <View style={styles.centered}>
+          <Ionicons name="ban" size={72} color={theme.colors.error} style={styles.errorIcon} />
+          <Text style={styles.title}>Interview Stopped</Text>
+          <Text style={styles.errorMessage}>
+            {errorMessage || "This interview was stopped after repeated proctoring/OCR flags. The candidate has been sent to blocked candidates for admin review."}
+          </Text>
+          <View style={styles.proctorFlagBox}>
+            <Ionicons name="warning" size={16} color="#92400e" />
+            <Text style={styles.proctorFlagText}>
+              {lastProctorFlag || 'Proctoring/OCR limit reached'} · {proctorFlagCount} flags
+            </Text>
+          </View>
           <AppButton title="Back to Home" variant="ghost" onPress={() => navigation.navigate("HomeTabs")} style={styles.ghostBtn} textStyle={{ color: theme.colors.textSecondary }} />
         </View>
       )}
@@ -692,6 +965,14 @@ const styles = StyleSheet.create({
   userTranscriptBubble: { alignSelf: "flex-end", backgroundColor: "#eef2ff", borderColor: "#c7d2fe" },
   transcriptSpeaker: { fontSize: 11, fontWeight: "800", color: theme.colors.textSecondary, marginBottom: 3, textTransform: "uppercase" },
   transcriptText: { fontSize: 14, lineHeight: 20, color: theme.colors.text },
+  ocrSection: { width: "100%", backgroundColor: "#fff", borderRadius: theme.borderRadius.lg, borderWidth: 1, borderColor: theme.colors.border, padding: theme.spacing.md, marginBottom: theme.spacing.md },
+  ocrHeader: { flexDirection: "row", alignItems: "center", marginBottom: theme.spacing.sm },
+  ocrTitle: { marginLeft: 8, fontSize: 15, fontWeight: "700", color: theme.colors.text, flex: 1 },
+  ocrBadge: { backgroundColor: "#f1f5f9", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12 },
+  ocrBadgeActive: { backgroundColor: "#dcfce7" },
+  ocrBadgeError: { backgroundColor: "#fee2e2" },
+  ocrBadgeText: { fontSize: 10, fontWeight: "800", color: theme.colors.textSecondary },
+  ocrText: { fontSize: 13, lineHeight: 19, color: theme.colors.textSecondary },
   micSection: { flexDirection: "row", alignItems: "center", marginBottom: theme.spacing.lg, backgroundColor: "#fff", paddingHorizontal: theme.spacing.lg, paddingVertical: theme.spacing.md, borderRadius: theme.borderRadius.lg, borderWidth: 1, borderColor: theme.colors.border },
   micIndicator: { width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.border, justifyContent: "center", alignItems: "center", marginRight: theme.spacing.md },
   micIndicatorActive: { backgroundColor: theme.colors.secondary },
@@ -709,6 +990,13 @@ const styles = StyleSheet.create({
   fitmentLabel: { fontSize: 13, color: theme.colors.textSecondary, marginBottom: 6, marginTop: 4 },
   fitmentValue: { fontSize: 22, fontWeight: "800", color: theme.colors.secondary, marginBottom: 4 },
   fitmentScore: { fontSize: 15, color: theme.colors.text, fontWeight: "600" },
+  completedScores: { width: "100%", marginTop: theme.spacing.md, paddingTop: theme.spacing.md, borderTopWidth: 1, borderTopColor: theme.colors.border },
+  completedScoresTitle: { fontSize: 13, fontWeight: "800", color: theme.colors.text, marginBottom: theme.spacing.sm, textAlign: "left" },
+  completedScoreRow: { flexDirection: "row", alignItems: "center", width: "100%", marginTop: 8 },
+  completedScoreLabel: { width: 32, fontSize: 12, fontWeight: "800", color: theme.colors.textSecondary },
+  completedScoreTrack: { flex: 1, height: 8, borderRadius: 4, backgroundColor: "#e5e7eb", overflow: "hidden" },
+  completedScoreFill: { height: "100%", borderRadius: 4 },
+  completedScoreValue: { width: 44, textAlign: "right", fontSize: 12, fontWeight: "800" },
   errorIcon: { marginBottom: theme.spacing.xl },
   errorMessage: { fontSize: 15, color: theme.colors.error, textAlign: "center", lineHeight: 22, marginBottom: theme.spacing.xl, paddingHorizontal: theme.spacing.sm },
 
@@ -749,6 +1037,20 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   cameraFallbackText: { fontSize: 13, color: theme.colors.textSecondary, fontWeight: '600' },
+  proctorFlagBox: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#fffbeb',
+    borderWidth: 1,
+    borderColor: '#fde68a',
+    borderRadius: theme.borderRadius.md,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    marginBottom: theme.spacing.md,
+  },
+  proctorFlagText: { flex: 1, color: '#92400e', fontSize: 13, fontWeight: '700' },
   webStatusBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
     alignSelf: 'flex-start',

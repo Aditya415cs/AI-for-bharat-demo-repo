@@ -24,12 +24,14 @@ export const registerUser = async (name: string, email: string, password: string
 
   // Store user details in the profiles table
   if (data.user) {
+    // Fix 1.8: Include role: 'candidate' so new users are not rejected by the admin dashboard
     const { error: profileError } = await supabase
       .from('profiles')
       .upsert({
         id: data.user.id,
         full_name: name,
         email: email,
+        role: 'candidate',
         updated_at: new Date(),
       });
     

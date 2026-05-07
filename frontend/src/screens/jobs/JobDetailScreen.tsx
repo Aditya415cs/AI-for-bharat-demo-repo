@@ -54,14 +54,15 @@ export const JobDetailScreen = ({ route, navigation }: any) => {
     if (!user) return;
     setApplying(true);
     try {
-      // 1. Create Application
+      // Fix 1.6: Specify onConflict to correctly handle duplicate applications
+      // when a unique constraint exists on (user_id, job_id)
       const { error: appError } = await supabase
         .from('applications')
         .upsert({ 
           user_id: user.id, 
           job_id: jobId,
           status: 'applied'
-        });
+        }, { onConflict: 'user_id,job_id' });
 
       if (appError) throw appError;
 

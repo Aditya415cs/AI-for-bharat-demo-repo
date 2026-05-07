@@ -13,13 +13,20 @@ export const InterviewIntroScreen: React.FC<any> = ({ navigation, route }) => {
   const { profile, user } = useContext(AuthContext);
   const [referencePhoto, setReferencePhoto] = useState<string | null>(null);
   const [jobTrade, setJobTrade] = React.useState<string | null>(null);
+  const [jobLanguage, setJobLanguage] = React.useState<string | null>(null);
+  const [jobDistrict, setJobDistrict] = React.useState<string | null>(null);
 
-  // If coming from a job, fetch the job's trade so the interview is relevant
+  // Fix 1.4: Fetch trade, language, and district from jobs so the interview
+  // is started with the correct job context
   React.useEffect(() => {
     if (!jobId) return;
     import('../../services/supabase/config').then(({ supabase }) => {
-      supabase.from('jobs').select('trade').eq('id', jobId).single()
-        .then(({ data }) => { if (data?.trade) setJobTrade(data.trade); });
+      supabase.from('jobs').select('trade, language, district').eq('id', jobId).single()
+        .then(({ data }) => {
+          if (data?.trade) setJobTrade(data.trade);
+          if (data?.language) setJobLanguage(data.language);
+          if (data?.district) setJobDistrict(data.district);
+        });
     });
   }, [jobId]);
 
@@ -192,9 +199,12 @@ export const InterviewIntroScreen: React.FC<any> = ({ navigation, route }) => {
             }
             navigation.navigate('Interview', {
               jobId,
+              userId: user?.id ?? '',
               referencePhoto,
               candidateName: profile?.full_name ?? 'Candidate',
               trade: effectiveTrade,
+              language: jobLanguage || profile?.language_preference || 'en',
+              district: jobDistrict || profile?.district || '',
               phoneNumber: profile?.phone ?? '',
               email: user?.email ?? '',
             });

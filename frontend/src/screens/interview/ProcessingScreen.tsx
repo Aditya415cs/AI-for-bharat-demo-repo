@@ -1,73 +1,31 @@
-import React, { useEffect, useContext } from 'react';
+import React from 'react';
 import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../../theme';
-import { supabase } from '../../services/supabase/config';
-import { AuthContext } from '../../context/AuthContext';
+import { AppButton } from '../../components/AppButton';
 
-export const ProcessingScreen: React.FC<any> = ({ navigation, route }) => {
-  const { jobId } = route.params || {};
-  const { user, profile } = useContext(AuthContext);
-
-  useEffect(() => {
-    const saveAndNavigate = async () => {
-      // 1. Generate Mock Result
-      const mockResult = {
-        score: Math.floor(Math.random() * (95 - 75 + 1)) + 75,
-        classification: 'Job-Ready',
-        confidence_score: Math.floor(Math.random() * (90 - 80 + 1)) + 80,
-        feedback: {
-          strengths: ['Clear Communication', 'Strong Trade Knowledge', 'Confidence'],
-          improvements: ['Eye Contact', 'Pacing of complex answers'],
-        }
-      };
-
-      // 2. Save to Supabase if jobId and user exist
-      if (jobId && user) {
-        try {
-          await supabase.from('interviews').insert({
-            user_id: user.id,
-            job_id: jobId,
-            candidate_name: profile?.full_name || user.email || 'Candidate',
-            phone_number: profile?.phone || null,
-            trade: profile?.trade || 'Unknown',
-            average_score: mockResult.score,
-            fitment: mockResult.classification,
-            classification: mockResult.classification,
-            confidence_score: mockResult.confidence_score,
-            status: 'completed',
-            feedback: mockResult.feedback
-          });
-        } catch (err) {
-          console.error('Error saving interview:', err);
-        }
-      }
-
-      // 3. Navigate after delay
-      setTimeout(() => {
-        navigation.navigate('Result', { jobId, resultData: mockResult });
-      }, 2000);
-    };
-
-    saveAndNavigate();
-  }, []);
-
+export const ProcessingScreen: React.FC<any> = ({ navigation }) => {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.content}>
         <View style={styles.aiGlow}>
           <Ionicons name="sparkles" size={80} color={theme.colors.primary} />
-          <ActivityIndicator 
-            size={120} 
-            color={theme.colors.primary} 
-            style={styles.spinner} 
+          <ActivityIndicator
+            size={120}
+            color={theme.colors.primary}
+            style={styles.spinner}
           />
         </View>
-        <Text style={styles.title}>Analyzing your interview...</Text>
+        <Text style={styles.title}>Processing happens after the live interview</Text>
         <Text style={styles.subtitle}>
-          Our AI is evaluating your communication, confidence, and trade knowledge.
+          Results are saved by the backend voice agent when Priya closes the interview.
         </Text>
+        <AppButton
+          title="Back to Home"
+          onPress={() => navigation.navigate('HomeTabs')}
+          style={styles.button}
+        />
       </View>
     </SafeAreaView>
   );
@@ -107,5 +65,9 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 24,
     paddingHorizontal: 20,
+    marginBottom: 24,
+  },
+  button: {
+    width: '100%',
   },
 });

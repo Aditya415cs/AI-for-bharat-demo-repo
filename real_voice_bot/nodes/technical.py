@@ -367,6 +367,65 @@ Rules:
         }
 
 
+def persist_interview_result(state: InterviewState, *, partial: bool = False) -> InterviewState:
+    """Persist the current interview state once. Safe to call from close/exit paths."""
+    if state.get("result_saved"):
+        return state
+
+    scores = state.get("scores", [])
+    if not scores:
+        logger.warning("[Persist] No scored answers yet; skipping result save.")
+        return state
+
+    avg = round(sum(scores) / len(scores), 1)
+    weak_topics = list(set(state.get("weak_topics", [])))
+    candidate_info = state.get("candidate_info", {})
+    questions = state.get("questions", [])
+
+    from database import check_integrity_flag
+
+    if partial:
+        fitment = "Requires Manual Verification"
+    elif avg >= 7.5:
+        fitment = "Job-Ready"
+    elif avg >= 5.0:
+        fitment = "Requires Training"
+    elif avg >= 3.0:
+        fitment = "Low Confidence"
+    else:
+        fitment = "Requires Significant Upskilling"
+
+    if check_integrity_flag(scores, avg):
+        fitment = "Requires Manual Verification"
+
+    feedback = _generate_feedback(scores, weak_topics, questions, candidate_info, avg)
+    transcript = state.get("messages", [])
+
+    try:
+        record_id = save_result(
+            candidate_name=candidate_info.get("name", "Unknown"),
+            phone_number=candidate_info.get("phone_number", ""),
+            trade=candidate_info.get("trade", ""),
+            scores=scores,
+            weak_topics=weak_topics,
+            fitment=fitment,
+            average_score=avg,
+            language=candidate_info.get("language", "English"),
+            district=candidate_info.get("district"),
+            feedback=feedback,
+            transcript=transcript,
+            email=candidate_info.get("email", ""),
+            job_id=candidate_info.get("job_id") or None,
+            user_id=candidate_info.get("user_id") or None,
+            livekit_room=candidate_info.get("livekit_room") or None,
+        )
+        logger.info(f"[Persist] Results saved — record ID: {record_id}")
+        return {**state, "result_saved": True, "saved_result_id": record_id}
+    except Exception as e:
+        logger.error(f"[Persist] Failed to save results: {e}")
+        return state
+
+
 def close_interview_node(state: InterviewState) -> InterviewState:
     scores = state["scores"]
     avg = round(sum(scores) / len(scores), 1) if scores else 0
@@ -391,33 +450,7 @@ def close_interview_node(state: InterviewState) -> InterviewState:
 
     logger.info(f"[Close] Candidate: {candidate_info} | Avg: {avg} | Fitment: {fitment} | Weak: {weak_topics}")
 
-    # ── Generate structured feedback ──
-    feedback = _generate_feedback(scores, weak_topics, questions, candidate_info, avg)
-    logger.info(f"[Close] Feedback generated: {feedback}")
-
-    # ── Build transcript from messages ──
-    transcript = state.get("messages", [])
-
-    # ── Persist results to SQLite + Supabase ──
-    try:
-        record_id = save_result(
-            candidate_name=candidate_info.get("name", "Unknown"),
-            phone_number=candidate_info.get("phone_number", ""),
-            trade=candidate_info.get("trade", ""),
-            scores=scores,
-            weak_topics=weak_topics,
-            fitment=fitment,
-            average_score=avg,
-            language=candidate_info.get("language", "English"),
-            district=candidate_info.get("district"),
-            feedback=feedback,
-            transcript=transcript,
-            email=candidate_info.get("email", ""),
-            job_id=candidate_info.get("job_id") or None,
-        )
-        logger.info(f"[Close] Results saved — record ID: {record_id}")
-    except Exception as e:
-        logger.error(f"[Close] Failed to save results: {e}")
+    state = persist_interview_result(state)
 
     # ── Generate warm closing message ──
     close_llm = get_llm(temperature=0.7, max_tokens=200)

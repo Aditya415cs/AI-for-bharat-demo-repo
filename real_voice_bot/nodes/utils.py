@@ -1,6 +1,7 @@
 import os
 import json
 import random
+import re
 from collections import defaultdict
 from langchain_groq import ChatGroq
 
@@ -29,27 +30,52 @@ def strip_tag(text: str, tag: str) -> str:
     """Removes a system tag from response text before speaking."""
     return text.replace(tag, "").strip()
 
+def _normalise_trade_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+
 def load_questions_for_trade(trade: str) -> list:
     """
     Loads all questions for a trade from the JSON files.
     Returns 10 questions spread across topics.
     """
     trade_data = None
+    all_trade_data = []
+    requested_trade = _normalise_trade_name(trade)
+
     for file in JSON_FILES:
         try:
             with open(file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            for key in data:
-                if key.lower().strip() == trade.lower().strip():
+            all_trade_data.extend(data.values())
+
+            normalised_keys = {
+                key: _normalise_trade_name(key)
+                for key in data
+            }
+
+            # Prefer exact matches, then forgiving partial matches such as
+            # "electrical work" -> "Electrician".
+            for key, normalised_key in normalised_keys.items():
+                if normalised_key == requested_trade:
                     trade_data = data[key]
                     break
+            if not trade_data and requested_trade:
+                for key, normalised_key in normalised_keys.items():
+                    if requested_trade in normalised_key or normalised_key in requested_trade:
+                        trade_data = data[key]
+                        break
         except FileNotFoundError:
             continue
         if trade_data:
             break
 
     if not trade_data:
-        return []
+        # Keep the interview moving even when the extracted trade is vague
+        # or absent. This is better than silently skipping the technical round.
+        trade_data = {}
+        for candidate_trade in all_trade_data:
+            for topic, q_list in candidate_trade.items():
+                trade_data.setdefault(topic, []).extend(q_list[:2])
 
     # Round-robin across topics for coverage
     topic_buckets = defaultdict(list)

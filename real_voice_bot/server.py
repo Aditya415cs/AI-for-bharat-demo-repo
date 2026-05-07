@@ -11,10 +11,11 @@ from uuid import uuid4
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from livekit import api
 
-from database import save_result, get_results, get_result_by_phone, get_result_by_name, get_latest_result, get_result_by_email
+from database import save_result, create_started_interview, get_results, get_result_by_phone, get_result_by_name, get_latest_result, get_result_by_email, update_interview_admin_status, get_blocked_candidates, block_candidate
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -42,6 +43,7 @@ app.add_middleware(
 # ── Schemas ──────────────────────────────────────────────────────────────────
 
 class StartInterviewRequest(BaseModel):
+    user_id: str = ""
     candidate_name: str
     trade: str
     phone_number: str
@@ -56,6 +58,9 @@ class StartInterviewResponse(BaseModel):
 
 
 class SaveResultRequest(BaseModel):
+    user_id: str | None = None
+    job_id: str | None = None
+    livekit_room: str | None = None
     candidate_name: str
     phone_number: str
     trade: str
@@ -75,6 +80,18 @@ class SaveResultResponse(BaseModel):
     id: str  # Supabase UUID
 
 
+class UpdateInterviewStatusRequest(BaseModel):
+    admin_status: str | None = None
+
+
+class BlockCandidateRequest(BaseModel):
+    user_id: str
+    job_id: str | None = None
+    company_id: str | None = None
+    livekit_room: str | None = None
+    reason: str = "Interview stopped after 5 proctoring/OCR flags."
+
+
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
 @app.post("/start-interview", response_model=StartInterviewResponse)
@@ -88,11 +105,13 @@ async def start_interview(req: StartInterviewRequest):
 
         import json as _json
         room_metadata = _json.dumps({
+            "user_id": req.user_id,
             "candidate_name": req.candidate_name,
             "trade": req.trade,
             "phone_number": req.phone_number,
             "email": req.email,
             "job_id": req.job_id,
+            "livekit_room": room_name,
         })
 
         await lkapi.room.create_room(
@@ -102,6 +121,16 @@ async def start_interview(req: StartInterviewRequest):
                 max_participants=2,
                 metadata=room_metadata,
             )
+        )
+
+        create_started_interview(
+            user_id=req.user_id or None,
+            candidate_name=req.candidate_name,
+            phone_number=req.phone_number,
+            trade=req.trade,
+            email=req.email,
+            job_id=req.job_id or None,
+            livekit_room=room_name,
         )
 
         await lkapi.agent_dispatch.create_dispatch(
@@ -145,6 +174,9 @@ async def save_result_endpoint(req: SaveResultRequest):
             feedback=req.feedback,
             transcript=req.transcript,
             email=req.email,
+            job_id=req.job_id,
+            user_id=req.user_id,
+            livekit_room=req.livekit_room,
         )
         logger.info(f"[Server] Saved — ID={inserted_id}, candidate={req.candidate_name}")
         return SaveResultResponse(status="saved", id=str(inserted_id))
@@ -163,6 +195,8 @@ async def get_results_endpoint(
     min_score: float | None = Query(default=None),
     max_score: float | None = Query(default=None),
     integrity_flag: bool | None = Query(default=None),
+    user_id: str | None = Query(default=None),
+    phone: str | None = Query(default=None),
 ):
     """Returns all interview results from Supabase, newest first."""
     try:
@@ -171,6 +205,8 @@ async def get_results_endpoint(
             language=language, district=district,
             min_score=min_score, max_score=max_score,
             integrity_flag=integrity_flag,
+            user_id=user_id,
+            phone_number=phone,
         )
     except Exception as e:
         logger.error(f"[Server] get_results failed: {e}")
@@ -195,6 +231,7 @@ async def get_by_phone(phone_number: str):
 async def get_latest(
     after: str | None = Query(default=None, description="ISO timestamp — only return results saved after this time"),
     phone: str | None = Query(default=None, description="Filter by phone number"),
+    email: str | None = Query(default=None, description="Filter by candidate email"),
 ):
     """
     Returns the single most recent interview result.
@@ -202,8 +239,13 @@ async def get_latest(
     Pass ?phone=<number>&after=<ISO> to get the result for a specific candidate's latest interview.
     """
     try:
-        result = get_latest_result(after_timestamp=after, phone_number=phone)
+        result = get_latest_result(after_timestamp=after, phone_number=phone, email=email)
         if not result:
+            if after or phone or email:
+                return JSONResponse(
+                    status_code=202,
+                    content={"status": "pending", "detail": "Result not ready yet."},
+                )
             raise HTTPException(status_code=404, detail="No result found.")
         return result
     except HTTPException:
@@ -243,6 +285,47 @@ async def get_by_email(email: str, after: str | None = Query(default=None)):
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/results/{interview_id}/admin-status")
+async def update_admin_status(interview_id: str, req: UpdateInterviewStatusRequest):
+    """Updates interviewer/admin decision status for an interview."""
+    try:
+        return update_interview_admin_status(interview_id, req.admin_status)
+    except Exception as e:
+        logger.error(f"[Server] update_admin_status failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/blocked-candidates")
+async def block_candidate_endpoint(req: BlockCandidateRequest):
+    """Blocks a candidate for a company and marks the active interview for admin review."""
+    try:
+        return block_candidate(
+            user_id=req.user_id,
+            job_id=req.job_id,
+            company_id=req.company_id,
+            livekit_room=req.livekit_room,
+            reason=req.reason,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"[Server] block_candidate failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/blocked-candidates")
+async def get_blocked_candidates_endpoint(
+    company_id: str | None = Query(default=None),
+    user_id: str | None = Query(default=None),
+):
+    """Returns blocked candidates from Supabase."""
+    try:
+        return get_blocked_candidates(company_id=company_id, user_id=user_id)
+    except Exception as e:
+        logger.error(f"[Server] get_blocked_candidates failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

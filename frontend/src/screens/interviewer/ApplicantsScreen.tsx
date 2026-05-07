@@ -9,10 +9,12 @@ import { theme } from '../../theme';
 import { supabase } from '../../services/supabase/config';
 import { AppCard } from '../../components/AppCard';
 import { AuthContext } from '../../context/AuthContext';
+import { getBlockedCandidates, getResults, updateInterviewAdminStatus } from '../../services/interviewService';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type Candidate = {
-  id: string;           // interview id
+  id: string;
+  hasInterview: boolean;
   userId: string | null;
   jobId: string | null;
   applicationId: string | null;
@@ -30,6 +32,7 @@ type Candidate = {
   weakTopics: string[];
   feedback: any;
   scores: number[];
+  phoneNumber?: string;
 };
 
 // ── Fitment helpers ───────────────────────────────────────────────────────────
@@ -51,6 +54,7 @@ const STATUS_COLOR: Record<string, string> = {
   shortlisted: '#10b981',
   rejected: '#ef4444',
   marked_for_training: '#8b5cf6',
+  blocked: '#111827',
   applied: '#64748b',
   pending: '#64748b',
 };
@@ -59,6 +63,14 @@ function scoreColor(s: number) {
   if (s >= 7.5) return '#10b981';
   if (s >= 5) return '#f59e0b';
   return '#ef4444';
+}
+
+function normalizeText(value?: string | null) {
+  return (value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function normalizePhone(value?: string | null) {
+  return (value || '').replace(/\D/g, '');
 }
 
 // ── Filter chip ───────────────────────────────────────────────────────────────
@@ -117,29 +129,20 @@ export const InterviewerApplicantsScreen = ({ route, navigation }: any) => {
     if (!user) return;
     setLoading(true);
     try {
-      // Fetch all interviews — admin sees all, employer sees for their jobs
-      const ivQuery = supabase
-        .from('interviews')
-        .select('id, user_id, job_id, candidate_name, trade, language, district, category, fitment, average_score, confidence_score, integrity_flag, weak_topics, feedback, scores, created_at, admin_status')
-        .order('created_at', { ascending: false });
+      let allowedJobIds: string[] | null = null;
+      let allowedApplicantUserIds: string[] | null = null;
 
       if (!isAdmin) {
-        // Get employer's job IDs
         const { data: myJobs } = await supabase
           .from('jobs').select('id').eq('created_by', user.id);
-        const jobIds = (myJobs || []).map((j: any) => j.id);
+        allowedJobIds = (myJobs || []).map((j: any) => j.id);
 
-        if (jobIds.length > 0) {
-          // Get user_ids of applicants for this employer's jobs
+        if (allowedJobIds.length > 0) {
           const { data: apps } = await supabase
-            .from('applications').select('user_id').in('job_id', jobIds);
-          const applicantUserIds = [...new Set((apps || []).map((a: any) => a.user_id).filter(Boolean))];
+            .from('applications').select('user_id').in('job_id', allowedJobIds);
+          allowedApplicantUserIds = [...new Set((apps || []).map((a: any) => a.user_id).filter(Boolean))] as string[];
 
-          if (applicantUserIds.length > 0) {
-            // Show interviews for these users (includes voice bot interviews without job_id)
-            ivQuery.in('user_id', applicantUserIds);
-          } else {
-            // No applicants yet — show nothing
+          if (allowedApplicantUserIds.length === 0) {
             setAllCandidates([]);
             setLoading(false);
             return;
@@ -151,10 +154,16 @@ export const InterviewerApplicantsScreen = ({ route, navigation }: any) => {
         }
       }
 
-      if (jobId) ivQuery.eq('job_id', jobId);
-
-      const { data: interviews, error } = await ivQuery;
-      if (error) throw error;
+      let interviews = await getResults();
+      const blockedRows = isAdmin ? await getBlockedCandidates().catch(() => []) : [];
+      const blockedUserIds = new Set((blockedRows || []).map((row: any) => row.user_id).filter(Boolean));
+      if (jobId) interviews = interviews.filter((iv: any) => iv.job_id === jobId);
+      if (!isAdmin) {
+        interviews = interviews.filter((iv: any) =>
+          (iv.job_id && allowedJobIds?.includes(iv.job_id)) ||
+          (iv.user_id && allowedApplicantUserIds?.includes(iv.user_id))
+        );
+      }
 
       // Fetch application statuses for matched user+job pairs
       const userJobPairs = (interviews || [])
@@ -180,6 +189,7 @@ export const InterviewerApplicantsScreen = ({ route, navigation }: any) => {
         const key = `${iv.user_id}__${iv.job_id}`;
         return {
           id: iv.id,
+          hasInterview: true,
           userId: iv.user_id,
           jobId: iv.job_id,
           applicationId: appIdMap[key] ?? null,
@@ -191,17 +201,90 @@ export const InterviewerApplicantsScreen = ({ route, navigation }: any) => {
           score: Number(iv.average_score || 0),
           confidence: Number(iv.confidence_score || 0),
           fitment: iv.fitment || 'Pending',
-          integrityFlag: iv.integrity_flag || false,
+          integrityFlag: iv.integrity_flag || blockedUserIds.has(iv.user_id) || false,
           // Use admin_status if set, otherwise fall back to application status
-          appStatus: iv.admin_status || appMap[key] || 'applied',
-          interviewDate: iv.created_at,
+          appStatus: blockedUserIds.has(iv.user_id) ? 'blocked' : (iv.admin_status || appMap[key] || 'applied'),
+          interviewDate: iv.interview_date ?? iv.created_at,
           weakTopics: iv.weak_topics || [],
           feedback: iv.feedback || null,
           scores: iv.scores || [],
+          phoneNumber: iv.phone_number || '',
         };
       });
 
-      setAllCandidates(candidates);
+      if (isAdmin) {
+        const { data: profiles, error: profilesError } = await supabase
+          .from('profiles')
+          .select('id, full_name, phone, trade, district, role');
+
+        if (profilesError) {
+          console.warn('Admin profiles fetch failed:', profilesError.message);
+        }
+
+        const existingUserIds = new Set(candidates.map((c) => c.userId).filter(Boolean));
+        const profileOnlyCandidates: Candidate[] = (profiles || [])
+          .filter((p: any) => (p.role === 'candidate' || !p.role) && !existingUserIds.has(p.id))
+          .map((p: any) => ({
+            id: `profile_${p.id}`,
+            hasInterview: false,
+            userId: p.id,
+            jobId: null,
+            applicationId: null,
+            name: p.full_name || 'Unknown',
+            trade: p.trade || '—',
+            district: p.district || '—',
+            language: '—',
+            category: 'No interview yet',
+            score: 0,
+            confidence: 0,
+            fitment: 'Not Interviewed',
+            integrityFlag: blockedUserIds.has(p.id),
+            appStatus: blockedUserIds.has(p.id) ? 'blocked' : 'pending',
+            interviewDate: '',
+            weakTopics: [],
+            feedback: null,
+            scores: [],
+            phoneNumber: p.phone || '',
+          }));
+
+        const unmatchedProfileOnlyCandidates = profileOnlyCandidates
+          .filter((profileCandidate) => {
+            const profilePhone = normalizePhone(profileCandidate.phoneNumber);
+            const profileName = normalizeText(profileCandidate.name);
+            const profileTrade = normalizeText(profileCandidate.trade);
+            const matchedIndex = candidates.findIndex((candidate) => {
+              if (candidate.userId && candidate.userId === profileCandidate.userId) return true;
+              if (profilePhone && normalizePhone(candidate.phoneNumber) === profilePhone) return true;
+
+              const candidateName = normalizeText(candidate.name);
+              const candidateTrade = normalizeText(candidate.trade);
+              const tradeMatches = !profileTrade || !candidateTrade || candidateTrade === profileTrade;
+              return !!profileName && candidateName === profileName && tradeMatches;
+            });
+
+            if (matchedIndex >= 0) {
+              const matched = candidates[matchedIndex];
+              candidates[matchedIndex] = {
+                ...matched,
+                userId: matched.userId || profileCandidate.userId,
+                district: matched.district || profileCandidate.district,
+                phoneNumber: matched.phoneNumber || profileCandidate.phoneNumber || '',
+              };
+              return false;
+            }
+
+            return true;
+          })
+          .map((candidate) => ({
+            ...candidate,
+            category: 'No saved result',
+            fitment: 'Result Missing',
+          }));
+
+        setAllCandidates([...candidates, ...unmatchedProfileOnlyCandidates]);
+      } else {
+        setAllCandidates(candidates);
+      }
     } catch (err) {
       console.error('Error fetching candidates:', err);
     } finally {
@@ -250,11 +333,7 @@ export const InterviewerApplicantsScreen = ({ route, navigation }: any) => {
     ));
     try {
       // Always write to interviews.admin_status — works without an application record
-      const { error } = await supabase
-        .from('interviews')
-        .update({ admin_status: status })
-        .eq('id', candidate.id);
-      if (error) throw error;
+      await updateInterviewAdminStatus(candidate.id, status);
 
       // Also update applications table if a record exists (best-effort)
       if (candidate.applicationId) {
@@ -285,7 +364,7 @@ export const InterviewerApplicantsScreen = ({ route, navigation }: any) => {
       onPress={() => navigation.navigate('CandidateDetail', {
         candidateId: item.userId,
         jobId: item.jobId,
-        interviewId: item.id,
+        interviewId: item.hasInterview ? item.id : undefined,
       })}
     >
       <AppCard style={[
@@ -330,7 +409,7 @@ export const InterviewerApplicantsScreen = ({ route, navigation }: any) => {
         </View>
 
         {/* Action buttons — show for all candidates that have a user_id */}
-        {item.userId && (
+        {item.hasInterview && item.userId && (
           <View style={styles.cardActions}>
             {/* Status tag — shown when a decision has been made */}
             {item.appStatus !== 'not_applied' && item.appStatus !== 'applied' ? (
@@ -510,7 +589,7 @@ export const InterviewerApplicantsScreen = ({ route, navigation }: any) => {
 
             <Text style={styles.filterLabel}>Application Status</Text>
             <View style={styles.chipRow}>
-              {['all', 'applied', 'shortlisted', 'marked_for_training', 'rejected'].map(s => (
+              {['all', 'applied', 'shortlisted', 'marked_for_training', 'rejected', 'blocked'].map(s => (
                 <Chip key={s} label={s === 'all' ? 'All' : s.replace('_', ' ')} active={filterStatus === s} onPress={() => setFilterStatus(s)} />
               ))}
             </View>

@@ -69,6 +69,15 @@ def experience_node(state: InterviewState) -> InterviewState:
     response_text = response.content
 
     tag_detected = "[EXPERIENCE_COMPLETE]" in response_text
+    candidate_turns = sum(
+        1
+        for message in history
+        if message.get("role") == "user"
+        and not str(message.get("content", "")).startswith("The candidate's name is")
+    )
+    if candidate_turns >= 2:
+        tag_detected = True
+
     clean_response = strip_tag(response_text, "[EXPERIENCE_COMPLETE]")
     history = history + [{"role": "assistant", "content": clean_response}]
 

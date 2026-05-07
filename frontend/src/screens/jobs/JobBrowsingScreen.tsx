@@ -20,12 +20,15 @@ export const JobBrowsingScreen = ({ navigation }: any) => {
   const fetchJobs = async () => {
     setLoading(true);
     try {
-      const { data: blockedData } = await supabase
-        .from('blocked_candidates')
-        .select('company_id')
-        .eq('user_id', user?.id);
-      
-      const blockedCompanyIds = blockedData?.map(b => b.company_id) || [];
+      // Fix 1.5: Guard the blocked_candidates query — only run when user.id is defined
+      let blockedCompanyIds: string[] = [];
+      if (user?.id) {
+        const { data: blockedData } = await supabase
+          .from('blocked_candidates')
+          .select('company_id')
+          .eq('user_id', user.id);
+        blockedCompanyIds = blockedData?.map(b => b.company_id) || [];
+      }
 
       let query = supabase
         .from('jobs')

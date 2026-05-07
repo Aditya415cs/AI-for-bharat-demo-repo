@@ -22,6 +22,7 @@ import {
   Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
 import { supabase } from './lib/supabase';
+import { getInterviewResults } from './lib/backend';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -197,14 +198,10 @@ export default function App() {
       appsData = applications || [];
     }
 
-    // All interviews — admin sees all, employer sees for their jobs
-    const interviewQuery = supabase
-      .from('interviews')
-      .select('*')
-      .order('created_at', { ascending: false });
-    if (!isAdmin && jobIds.length > 0) interviewQuery.in('job_id', jobIds);
-    const { data: interviewData, error: interviewsError } = await interviewQuery;
-    if (interviewsError) { setMessage(interviewsError.message); return; }
+    let interviewData = await getInterviewResults();
+    if (!isAdmin && jobIds.length > 0) {
+      interviewData = interviewData.filter((item: any) => jobIds.includes(item.job_id));
+    }
 
     setJobs(jobsData || []);
     setInterviews((interviewData || []) as Interview[]);
@@ -466,7 +463,7 @@ function DashboardView({ jobs, candidates, interviews }: { jobs: any[]; candidat
             <div style={{ height: 260 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie data={fitmentData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label={({ name, percent }) => `${name.split(' ')[0]} ${(percent * 100).toFixed(0)}%`} labelLine={false}>
+                  <Pie data={fitmentData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label={({ name = '', percent = 0 }) => `${String(name).split(' ')[0]} ${(percent * 100).toFixed(0)}%`} labelLine={false}>
                     {fitmentData.map((entry, i) => (
                       <Cell key={i} fill={FITMENT_COLORS[entry.name] ?? PIE_COLORS[i % PIE_COLORS.length]} />
                     ))}
@@ -647,7 +644,8 @@ function CandidatesView({ candidates, interviews, onRefresh, setMessage }: {
 
   async function updateStatus(candidate: any, status: string) {
     if (candidate.status === 'not_applied') {
-      // Interview-only candidate — create an application record if we have user_id + job_id
+      // Fix 1.10: Interview-only candidate — look up the real application id before updating.
+      // candidate.id is a synthetic iv_<uuid> string and will match zero rows if used directly.
       if (candidate.user_id && candidate.job_id) {
         const { data: existing } = await supabase
           .from('applications')
@@ -656,9 +654,11 @@ function CandidatesView({ candidates, interviews, onRefresh, setMessage }: {
           .eq('job_id', candidate.job_id)
           .maybeSingle();
         if (existing) {
+          // Use the real application id returned from Supabase
           const { error } = await supabase.from('applications').update({ status }).eq('id', existing.id);
           if (error) setMessage(error.message);
         } else {
+          // No application exists yet — insert one and capture the real id
           const { error } = await supabase
             .from('applications')
             .insert({ user_id: candidate.user_id, job_id: candidate.job_id, status });
@@ -669,6 +669,7 @@ function CandidatesView({ candidates, interviews, onRefresh, setMessage }: {
         return;
       }
     } else {
+      // Regular application candidate — candidate.id is the real applications.id UUID
       const { error } = await supabase.from('applications').update({ status }).eq('id', candidate.id);
       if (error) setMessage(error.message);
     }

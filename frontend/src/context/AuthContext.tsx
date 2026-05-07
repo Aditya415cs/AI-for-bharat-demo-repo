@@ -108,11 +108,33 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setProfile(newProfile);
 
     try {
+      // Fix 1.7: Only send columns that exist in the profiles table schema.
+      // onboarding_completed IS in the schema (confirmed from DB), so it's safe to include.
+      // We explicitly pick known columns to avoid sending any stray fields.
+      const {
+        id, full_name, phone, age, gender, district, trade,
+        experience_level, skills, education, work_preference,
+        language_preference, onboarding_completed, role,
+      } = newProfile;
+
       const { error } = await supabase
         .from('profiles')
         .upsert({
-          ...newProfile,
-          email: user.email, // always ensure email is saved
+          id,
+          full_name,
+          phone,
+          age,
+          gender,
+          district,
+          trade,
+          experience_level,
+          skills,
+          education,
+          work_preference,
+          language_preference,
+          onboarding_completed,
+          role,
+          email: user.email,
           updated_at: new Date(),
         });
 

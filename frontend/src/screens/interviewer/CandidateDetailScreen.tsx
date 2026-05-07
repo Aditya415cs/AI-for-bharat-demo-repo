@@ -8,6 +8,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../../theme';
 import { supabase } from '../../services/supabase/config';
 import { AppCard } from '../../components/AppCard';
+import { getResults, updateInterviewAdminStatus } from '../../services/interviewService';
 
 const FITMENT_COLOR: Record<string, string> = {
   'Job-Ready': '#10b981',
@@ -21,6 +22,7 @@ const STATUS_COLOR: Record<string, string> = {
   shortlisted: '#16a34a',
   rejected: '#dc2626',
   marked_for_training: '#8b5cf6',
+  blocked: '#111827',
 };
 
 export const InterviewerCandidateDetailScreen = ({ route, navigation }: any) => {
@@ -37,33 +39,13 @@ export const InterviewerCandidateDetailScreen = ({ route, navigation }: any) => 
     try {
       // ── 1. Fetch interview (always available, has district/trade/language from voice bot) ──
       let interviewData: any = null;
+      const backendInterviews = await getResults();
       if (interviewId) {
-        const { data, error } = await supabase
-          .from('interviews')
-          .select('*')
-          .eq('id', interviewId)
-          .maybeSingle();
-        if (error) console.warn('Interview fetch error:', error.message);
-        interviewData = data;
+        interviewData = backendInterviews.find((iv: any) => iv.id === interviewId) ?? null;
       } else if (candidateId && jobId) {
-        const { data } = await supabase
-          .from('interviews')
-          .select('*')
-          .eq('user_id', candidateId)
-          .eq('job_id', jobId)
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        interviewData = data;
+        interviewData = backendInterviews.find((iv: any) => iv.user_id === candidateId && iv.job_id === jobId) ?? null;
       } else if (candidateId) {
-        const { data } = await supabase
-          .from('interviews')
-          .select('*')
-          .eq('user_id', candidateId)
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        interviewData = data;
+        interviewData = backendInterviews.find((iv: any) => iv.user_id === candidateId) ?? null;
       }
 
       // ── 2. Fetch profile (optional — enriches with onboarding data) ──
@@ -81,6 +63,11 @@ export const InterviewerCandidateDetailScreen = ({ route, navigation }: any) => 
 
       // ── 3. Merge — interview data is the ground truth for assessment fields ──
       // Profile enriches with onboarding details where available
+      if (!profileData && !interviewData) {
+        setCandidate(null);
+        return;
+      }
+
       const merged = {
         // Identity
         full_name: profileData?.full_name || interviewData?.candidate_name || 'Unknown',
@@ -123,12 +110,7 @@ export const InterviewerCandidateDetailScreen = ({ route, navigation }: any) => 
     setUpdating(true);
 
     try {
-      const { error } = await supabase
-        .from('interviews')
-        .update({ admin_status: status })
-        .eq('id', candidate.interview.id);
-
-      if (error) throw error;
+      await updateInterviewAdminStatus(candidate.interview.id, status);
 
       // Also update applications table if a record exists (best-effort)
       if (candidateId && jobId) {
@@ -162,7 +144,7 @@ export const InterviewerCandidateDetailScreen = ({ route, navigation }: any) => 
     setCandidate((prev: any) => ({ ...prev, adminStatus: null }));
     setUpdating(true);
     try {
-      await supabase.from('interviews').update({ admin_status: null }).eq('id', candidate.interview.id);
+      await updateInterviewAdminStatus(candidate.interview.id, null);
     } catch (err) {
       console.error('Reset failed:', err);
     } finally {
@@ -377,7 +359,8 @@ export const InterviewerCandidateDetailScreen = ({ route, navigation }: any) => 
       </ScrollView>
 
       {/* ── Footer actions ── */}
-      <View style={styles.footer}>
+      {iv ? (
+        <View style={styles.footer}>
         {candidate.adminStatus ? (
           // Decision already made — show it with a reset option
           <View style={styles.decisionRow}>
@@ -426,7 +409,12 @@ export const InterviewerCandidateDetailScreen = ({ route, navigation }: any) => 
             </TouchableOpacity>
           </View>
         )}
-      </View>
+        </View>
+      ) : (
+        <View style={styles.footer}>
+          <Text style={styles.noInterviewText}>No completed interview yet.</Text>
+        </View>
+      )}
     </SafeAreaView>
   );
 };
@@ -516,4 +504,5 @@ const styles = StyleSheet.create({
     borderRadius: 12, borderWidth: 1, borderColor: theme.colors.border,
   },
   resetBtnText: { fontSize: 13, fontWeight: '600', color: theme.colors.textSecondary },
+  noInterviewText: { textAlign: 'center', fontSize: 14, fontWeight: '700', color: theme.colors.textSecondary },
 });
