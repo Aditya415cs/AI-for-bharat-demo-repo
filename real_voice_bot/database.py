@@ -173,7 +173,29 @@ def get_category_for_trade(trade: str) -> str:
     global _CATEGORY_MAP
     if _CATEGORY_MAP is None:
         _CATEGORY_MAP = _build_category_map()
-    return _CATEGORY_MAP.get(trade.lower().strip(), "Unknown")
+
+    normalised = trade.lower().strip()
+
+    # Direct match first
+    if normalised in _CATEGORY_MAP:
+        return _CATEGORY_MAP[normalised]
+
+    # Alias fallback for common shorthand values from old onboarding
+    _ALIASES: dict[str, str] = {
+        "mechanical engineer": "Polytechnic-Skilled Roles",
+        "civil engineer": "Polytechnic-Skilled Roles",
+        "electrical engineer": "Polytechnic-Skilled Roles",
+        "electronics engineer": "Polytechnic-Skilled Roles",
+        "computer science engineer": "Polytechnic-Skilled Roles",
+        "automobile engineer": "Polytechnic-Skilled Roles",
+        "mechatronics engineer": "Polytechnic-Skilled Roles",
+        "qc engineer": "Polytechnic-Skilled Roles",
+        "mechanic": "Blue-collar Trades",
+        "automobile technician": "Blue-collar Trades",
+        "driver": "Blue-collar Trades",
+        "construction": "Blue-collar Trades",
+    }
+    return _ALIASES.get(normalised, "Unknown")
 
 
 # ── Scoring helpers ──────────────────────────────────────────────────────────

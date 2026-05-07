@@ -370,21 +370,27 @@ function DashboardView({ jobs, candidates, interviews }: { jobs: any[]; candidat
   const categoryData = useMemo(() => {
     const BLUE_COLLAR = new Set([
       'electrician', 'plumber', 'welder', 'carpenter', 'mason', 'painter',
-      'hvac technician', 'mechanic / automobile technician', 'fitter', 'turner',
+      'hvac technician', 'mechanic / automobile technician', 'mechanic',
+      'automobile technician', 'fitter', 'turner',
       'machinist', 'cnc operator', 'lathe operator', 'sheet metal worker',
-      'fabricator', 'construction worker', 'civil site technician',
+      'fabricator', 'construction worker', 'construction', 'civil site technician',
       'heavy equipment operator', 'crane operator', 'forklift operator',
-      'truck driver', 'delivery driver', 'railway technician',
+      'truck driver', 'driver', 'delivery driver', 'railway technician',
       'solar panel installer', 'wind turbine technician',
       'fire safety technician', 'refrigeration technician', 'boiler operator',
       'mining technician', 'industrial maintenance technician',
     ]);
     const POLYTECHNIC = new Set([
-      'diploma mechanical engineer', 'diploma civil engineer',
-      'diploma electrical engineer', 'diploma electronics engineer',
-      'diploma computer science engineer', 'diploma automobile engineer',
-      'diploma mechatronics engineer', 'production supervisor',
-      'quality control engineer', 'cad designer', 'autocad technician',
+      'diploma mechanical engineer', 'mechanical engineer',
+      'diploma civil engineer', 'civil engineer',
+      'diploma electrical engineer', 'electrical engineer',
+      'diploma electronics engineer', 'electronics engineer',
+      'diploma computer science engineer', 'computer science engineer',
+      'diploma automobile engineer', 'automobile engineer',
+      'diploma mechatronics engineer', 'mechatronics engineer',
+      'production supervisor',
+      'quality control engineer', 'qc engineer',
+      'cad designer', 'autocad technician',
       'network technician', 'embedded systems technician',
       'robotics technician', 'instrumentation technician', 'plant operator',
       'process technician', 'manufacturing technician', 'telecom technician',
@@ -413,16 +419,15 @@ function DashboardView({ jobs, candidates, interviews }: { jobs: any[]; candidat
     };
 
     interviews.forEach(i => {
-      // Prefer stored category, fall back to deriving from trade name
-      const stored = i.category;
-      if (stored && stored in counts) {
-        counts[stored]++;
-        return;
-      }
       const trade = (i.trade ?? '').toLowerCase().trim();
-      if (BLUE_COLLAR.has(trade)) counts['Blue-collar Trades']++;
-      else if (POLYTECHNIC.has(trade)) counts['Polytechnic-Skilled Roles']++;
-      else if (SEMI_SKILLED.has(trade)) counts['Semi-Skilled Workforce']++;
+      // Always derive from trade name — most reliable source
+      if (BLUE_COLLAR.has(trade)) { counts['Blue-collar Trades']++; return; }
+      if (POLYTECHNIC.has(trade)) { counts['Polytechnic-Skilled Roles']++; return; }
+      if (SEMI_SKILLED.has(trade)) { counts['Semi-Skilled Workforce']++; return; }
+      // Fall back to stored category only if trade didn't match
+      const stored = i.category;
+      if (stored && stored in counts) counts[stored]++;
+      // Unknown / unrecognised trades are intentionally excluded from the chart
     });
 
     return Object.entries(counts).map(([name, value]) => ({ name, value }));

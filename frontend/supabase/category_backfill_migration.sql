@@ -7,28 +7,22 @@
 ALTER TABLE interviews DROP CONSTRAINT IF EXISTS interviews_category_check;
 
 -- Step 2: Backfill category for all existing rows based on trade name
+-- Uses LOWER(TRIM()) so casing and whitespace don't matter
 UPDATE interviews
 SET category = CASE
-  -- Blue-collar Trades
-  WHEN LOWER(TRIM(trade)) IN (
-    'electrician', 'plumber', 'welder', 'carpenter', 'mason', 'painter',
-    'hvac technician', 'mechanic / automobile technician', 'fitter', 'turner',
-    'machinist', 'cnc operator', 'lathe operator', 'sheet metal worker',
-    'fabricator', 'construction worker', 'civil site technician',
-    'heavy equipment operator', 'crane operator', 'forklift operator',
-    'truck driver', 'delivery driver', 'railway technician',
-    'solar panel installer', 'wind turbine technician',
-    'fire safety technician', 'refrigeration technician', 'boiler operator',
-    'mining technician', 'industrial maintenance technician'
-  ) THEN 'Blue-collar Trades'
 
   -- Polytechnic-Skilled Roles
   WHEN LOWER(TRIM(trade)) IN (
-    'diploma mechanical engineer', 'diploma civil engineer',
-    'diploma electrical engineer', 'diploma electronics engineer',
-    'diploma computer science engineer', 'diploma automobile engineer',
-    'diploma mechatronics engineer', 'production supervisor',
-    'quality control engineer', 'cad designer', 'autocad technician',
+    'diploma mechanical engineer', 'mechanical engineer',
+    'diploma civil engineer', 'civil engineer',
+    'diploma electrical engineer', 'electrical engineer',
+    'diploma electronics engineer', 'electronics engineer',
+    'diploma computer science engineer', 'computer science engineer',
+    'diploma automobile engineer', 'automobile engineer',
+    'diploma mechatronics engineer', 'mechatronics engineer',
+    'production supervisor',
+    'quality control engineer', 'qc engineer',
+    'cad designer', 'autocad technician',
     'network technician', 'embedded systems technician',
     'robotics technician', 'instrumentation technician', 'plant operator',
     'process technician', 'manufacturing technician', 'telecom technician',
@@ -37,6 +31,20 @@ SET category = CASE
     'service engineer', 'electrical design technician', 'tool and die maker',
     'water treatment technician', 'industrial automation technician'
   ) THEN 'Polytechnic-Skilled Roles'
+
+  -- Blue-collar Trades
+  WHEN LOWER(TRIM(trade)) IN (
+    'electrician', 'plumber', 'welder', 'carpenter', 'mason', 'painter',
+    'hvac technician', 'mechanic / automobile technician', 'mechanic',
+    'automobile technician', 'fitter', 'turner',
+    'machinist', 'cnc operator', 'lathe operator', 'sheet metal worker',
+    'fabricator', 'construction worker', 'construction', 'civil site technician',
+    'heavy equipment operator', 'crane operator', 'forklift operator',
+    'truck driver', 'driver', 'delivery driver', 'railway technician',
+    'solar panel installer', 'wind turbine technician',
+    'fire safety technician', 'refrigeration technician', 'boiler operator',
+    'mining technician', 'industrial maintenance technician'
+  ) THEN 'Blue-collar Trades'
 
   -- Semi-Skilled Workforce
   WHEN LOWER(TRIM(trade)) IN (
@@ -52,7 +60,7 @@ SET category = CASE
     'office support staff', 'dispatch assistant'
   ) THEN 'Semi-Skilled Workforce'
 
-  -- Keep existing if already correct, otherwise Unknown
+  -- Keep if already correct
   WHEN category IN ('Blue-collar Trades', 'Polytechnic-Skilled Roles', 'Semi-Skilled Workforce')
     THEN category
 
@@ -60,7 +68,7 @@ SET category = CASE
 END
 WHERE trade IS NOT NULL;
 
--- Step 3: Re-add the CHECK constraint with all valid values
+-- Step 3: Re-add the CHECK constraint
 ALTER TABLE interviews
   ADD CONSTRAINT interviews_category_check
   CHECK (category IN (
@@ -70,7 +78,7 @@ ALTER TABLE interviews
     'Unknown'
   ));
 
--- Step 4: Refresh the admin_interview_view to pick up changes
+-- Step 4: Recreate the admin_interview_view
 DROP VIEW IF EXISTS admin_interview_view;
 CREATE VIEW admin_interview_view AS
 SELECT
@@ -101,8 +109,8 @@ LEFT JOIN profiles p ON p.id = i.user_id;
 
 GRANT SELECT ON admin_interview_view TO authenticated;
 
--- Step 5: Verify — show category counts after backfill
-SELECT category, COUNT(*) as count
+-- Step 5: Verify
+SELECT trade, category, COUNT(*) as count
 FROM interviews
-GROUP BY category
-ORDER BY count DESC;
+GROUP BY trade, category
+ORDER BY category, trade;
