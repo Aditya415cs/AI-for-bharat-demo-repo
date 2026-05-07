@@ -57,6 +57,11 @@
         }
       ]
     ],
-    "extra": {}
+    "extra": {
+      "eas": {
+        "projectId": "f5dbb093-1d87-4210-a9cf-1331fc2bf878"
+      }
+    },
+    "owner": "adityasharma0810"
   }
 }
