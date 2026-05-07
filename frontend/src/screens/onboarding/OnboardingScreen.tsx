@@ -6,7 +6,54 @@ import { theme } from '../../theme';
 import { AppButton } from '../../components/AppButton';
 import { AuthContext } from '../../context/AuthContext';
 
-const TRADES = ['Electrician', 'Plumber', 'Carpenter', 'Mechanic', 'Driver', 'Painter', 'Construction', 'Other'];
+const TRADE_CATEGORIES = [
+  {
+    label: 'Blue-collar Trades',
+    trades: [
+      'Electrician', 'Plumber', 'Welder', 'Carpenter', 'Mason', 'Painter',
+      'HVAC Technician', 'Mechanic / Automobile Technician', 'Fitter', 'Turner',
+      'Machinist', 'CNC Operator', 'Lathe Operator', 'Sheet Metal Worker',
+      'Fabricator', 'Construction Worker', 'Civil Site Technician',
+      'Heavy Equipment Operator', 'Crane Operator', 'Forklift Operator',
+      'Truck Driver', 'Delivery Driver', 'Railway Technician',
+      'Solar Panel Installer', 'Wind Turbine Technician',
+      'Fire Safety Technician', 'Refrigeration Technician', 'Boiler Operator',
+      'Mining Technician', 'Industrial Maintenance Technician',
+    ],
+  },
+  {
+    label: 'Polytechnic-Skilled Roles',
+    trades: [
+      'Diploma Mechanical Engineer', 'Diploma Civil Engineer',
+      'Diploma Electrical Engineer', 'Diploma Electronics Engineer',
+      'Diploma Computer Science Engineer', 'Diploma Automobile Engineer',
+      'Diploma Mechatronics Engineer', 'Production Supervisor',
+      'Quality Control Engineer', 'CAD Designer', 'AutoCAD Technician',
+      'Network Technician', 'Embedded Systems Technician',
+      'Robotics Technician', 'Instrumentation Technician', 'Plant Operator',
+      'Process Technician', 'Manufacturing Technician', 'Telecom Technician',
+      'Biomedical Equipment Technician', 'Surveyor', 'Lab Technician',
+      'Safety Officer', 'Junior Site Engineer', 'Maintenance Engineer',
+      'Service Engineer', 'Electrical Design Technician', 'Tool and Die Maker',
+      'Water Treatment Technician', 'Industrial Automation Technician',
+    ],
+  },
+  {
+    label: 'Semi-Skilled Workforce',
+    trades: [
+      'Data Entry Operator', 'Office Assistant', 'Warehouse Assistant',
+      'Store Keeper', 'Sales Associate', 'Retail Executive',
+      'Customer Support Executive', 'BPO Executive', 'Delivery Executive',
+      'Packing Staff', 'Machine Helper', 'Production Line Worker',
+      'Security Guard', 'Housekeeping Staff', 'Hospital Ward Assistant',
+      'Nursing Assistant', 'Caregiver', 'Receptionist', 'Field Executive',
+      'Inventory Assistant', 'Helper Technician', 'Loading/Unloading Staff',
+      'Food Delivery Executive', 'Kitchen Assistant', 'Driver Assistant',
+      'Assembly Line Worker', 'Courier Staff', 'Printing Machine Assistant',
+      'Office Support Staff', 'Dispatch Assistant',
+    ],
+  },
+];
 const EXPERIENCE_LEVELS = [
   { label: 'Fresher', value: 'Fresher' },
   { label: '1–3 years', value: '1-3' },
@@ -118,17 +165,30 @@ export const OnboardingScreen: React.FC<any> = ({ navigation }) => {
           <View style={styles.stepContainer}>
             <Text style={styles.title}>{t('work_trade')}</Text>
             <Text style={styles.label}>{t('select_trade')}</Text>
-            <View style={styles.chipContainer}>
-              {TRADES.map(t_val => (
-                <TouchableOpacity 
-                  key={t_val} 
-                  onPress={() => setTrade(t_val)}
-                  style={[styles.chip, trade === t_val && styles.selectedChip]}
-                >
-                  <Text style={[styles.chipText, trade === t_val && styles.selectedChipText]}>{t_val}</Text>
+            {trade ? (
+              <View style={styles.selectedTradeBox}>
+                <Text style={styles.selectedTradeText}>{trade}</Text>
+                <TouchableOpacity onPress={() => setTrade('')}>
+                  <Ionicons name="close-circle" size={20} color={theme.colors.primary} />
                 </TouchableOpacity>
-              ))}
-            </View>
+              </View>
+            ) : null}
+            {TRADE_CATEGORIES.map(cat => (
+              <View key={cat.label}>
+                <Text style={styles.categoryHeader}>{cat.label}</Text>
+                <View style={styles.chipContainer}>
+                  {cat.trades.map(t_val => (
+                    <TouchableOpacity
+                      key={t_val}
+                      onPress={() => setTrade(t_val)}
+                      style={[styles.chip, trade === t_val && styles.selectedChip]}
+                    >
+                      <Text style={[styles.chipText, trade === t_val && styles.selectedChipText]}>{t_val}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            ))}
             <Text style={styles.label}>{t('experience')}</Text>
             {EXPERIENCE_LEVELS.map(exp => (
               <TouchableOpacity key={exp.value} onPress={() => setExperience(exp.value)} style={styles.radioOption}>
@@ -234,6 +294,9 @@ const styles = StyleSheet.create({
   selectedChip: { backgroundColor: '#eff6ff', borderColor: theme.colors.primary },
   chipText: { fontSize: 14, color: '#475569' },
   selectedChipText: { color: theme.colors.primary, fontWeight: '600' },
+  categoryHeader: { fontSize: 13, fontWeight: '700', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.8, marginTop: 16, marginBottom: 6, marginLeft: 4 },
+  selectedTradeBox: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#eff6ff', borderWidth: 1, borderColor: theme.colors.primary, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12, marginBottom: 8 },
+  selectedTradeText: { fontSize: 15, fontWeight: '600', color: theme.colors.primary, flex: 1 },
   radioOption: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12 },
   radio: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: '#cbd5e1', marginRight: 12 },
   radioSelected: { borderColor: theme.colors.primary, backgroundColor: theme.colors.primary },

@@ -366,13 +366,65 @@ function DashboardView({ jobs, candidates, interviews }: { jobs: any[]; candidat
     return Object.entries(counts).map(([name, value]) => ({ name, value }));
   }, [interviews]);
 
-  // Category breakdown
+  // Category breakdown — always show all 3 categories, even if count is 0
   const categoryData = useMemo(() => {
-    const counts: Record<string, number> = {};
+    const BLUE_COLLAR = new Set([
+      'electrician', 'plumber', 'welder', 'carpenter', 'mason', 'painter',
+      'hvac technician', 'mechanic / automobile technician', 'fitter', 'turner',
+      'machinist', 'cnc operator', 'lathe operator', 'sheet metal worker',
+      'fabricator', 'construction worker', 'civil site technician',
+      'heavy equipment operator', 'crane operator', 'forklift operator',
+      'truck driver', 'delivery driver', 'railway technician',
+      'solar panel installer', 'wind turbine technician',
+      'fire safety technician', 'refrigeration technician', 'boiler operator',
+      'mining technician', 'industrial maintenance technician',
+    ]);
+    const POLYTECHNIC = new Set([
+      'diploma mechanical engineer', 'diploma civil engineer',
+      'diploma electrical engineer', 'diploma electronics engineer',
+      'diploma computer science engineer', 'diploma automobile engineer',
+      'diploma mechatronics engineer', 'production supervisor',
+      'quality control engineer', 'cad designer', 'autocad technician',
+      'network technician', 'embedded systems technician',
+      'robotics technician', 'instrumentation technician', 'plant operator',
+      'process technician', 'manufacturing technician', 'telecom technician',
+      'biomedical equipment technician', 'surveyor', 'lab technician',
+      'safety officer', 'junior site engineer', 'maintenance engineer',
+      'service engineer', 'electrical design technician', 'tool and die maker',
+      'water treatment technician', 'industrial automation technician',
+    ]);
+    const SEMI_SKILLED = new Set([
+      'data entry operator', 'office assistant', 'warehouse assistant',
+      'store keeper', 'sales associate', 'retail executive',
+      'customer support executive', 'bpo executive', 'delivery executive',
+      'packing staff', 'machine helper', 'production line worker',
+      'security guard', 'housekeeping staff', 'hospital ward assistant',
+      'nursing assistant', 'caregiver', 'receptionist', 'field executive',
+      'inventory assistant', 'helper technician', 'loading/unloading staff',
+      'food delivery executive', 'kitchen assistant', 'driver assistant',
+      'assembly line worker', 'courier staff', 'printing machine assistant',
+      'office support staff', 'dispatch assistant',
+    ]);
+
+    const counts: Record<string, number> = {
+      'Blue-collar Trades': 0,
+      'Polytechnic-Skilled Roles': 0,
+      'Semi-Skilled Workforce': 0,
+    };
+
     interviews.forEach(i => {
-      const c = i.category ?? 'Unknown';
-      counts[c] = (counts[c] ?? 0) + 1;
+      // Prefer stored category, fall back to deriving from trade name
+      const stored = i.category;
+      if (stored && stored in counts) {
+        counts[stored]++;
+        return;
+      }
+      const trade = (i.trade ?? '').toLowerCase().trim();
+      if (BLUE_COLLAR.has(trade)) counts['Blue-collar Trades']++;
+      else if (POLYTECHNIC.has(trade)) counts['Polytechnic-Skilled Roles']++;
+      else if (SEMI_SKILLED.has(trade)) counts['Semi-Skilled Workforce']++;
     });
+
     return Object.entries(counts).map(([name, value]) => ({ name, value }));
   }, [interviews]);
 
@@ -498,20 +550,16 @@ function DashboardView({ jobs, candidates, interviews }: { jobs: any[]; candidat
 
         <div className="card">
           <h3>Category Breakdown</h3>
-          {categoryData.length === 0 ? (
-            <div className="empty-state"><p>No data yet.</p></div>
-          ) : (
-            <div style={{ height: 220 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={categoryData} layout="vertical">
-                  <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} />
-                  <YAxis type="category" dataKey="name" tick={{ fontSize: 10 }} width={130} />
-                  <Tooltip />
-                  <Bar dataKey="value" name="Interviews" fill="var(--purple)" radius={[0, 4, 4, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
+          <div style={{ height: 220 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={categoryData} layout="vertical">
+                <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} />
+                <YAxis type="category" dataKey="name" tick={{ fontSize: 10 }} width={160} />
+                <Tooltip />
+                <Bar dataKey="value" name="Interviews" fill="var(--purple)" radius={[0, 4, 4, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
         </div>
 
         <div className="card">
